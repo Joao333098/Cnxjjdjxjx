@@ -1,0 +1,5 @@
+{
+  "name": "OmniBrowser AI Agent",
+  "description": "An autonomous AI browser agent that can navigate, interact, and automate complex web tasks using Gemini.",
+  "requestFramePermissions": []
+}
