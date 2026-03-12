@@ -6,6 +6,7 @@ import cors from "cors";
 import { chromium, Browser, Page } from "playwright-chromium";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import OpenAI from "openai";
 
 dotenv.config();
 
@@ -30,6 +31,29 @@ async function startServer() {
   
   let activePage: Page | null = null;
   let browserContext: any = null;
+
+  // API routes
+  app.post("/api/nova", async (req, res) => {
+    const { messages, response_format } = req.body;
+    try {
+      const apiKey = process.env.VITE_NOVA_API_KEY;
+      if (!apiKey) throw new Error("API Key missing");
+      const openai = new OpenAI({
+        baseURL: 'https://api.nova.amazon.com/v1',
+        apiKey
+      });
+      const response = await openai.chat.completions.create({
+        model: "nova-pro-v1",
+        messages,
+        response_format,
+        max_completion_tokens: 8192
+      });
+      res.json(response);
+    } catch (error) {
+      console.error("Nova API error:", error);
+      res.status(500).json({ error: "Failed to call Nova API" });
+    }
+  });
 
   // Vite middleware
   if (process.env.NODE_ENV !== "production") {
@@ -364,10 +388,14 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "click":
         if (params.index) {
-          const indexResult = await page.evaluate(`(function(index) {
-            const target = document.querySelector('[data-agent-index="' + index + '"]');
+          const indexResult = await page.evaluate((index) => {
+            const target = document.querySelector(`[data-agent-index="${index}"]`);
             if (target instanceof HTMLElement) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              // Ensure it's visible
+              const style = window.getComputedStyle(target);
+              if (style.display === 'none' || style.visibility === 'hidden') return { success: false, reason: 'hidden' };
+              
               target.focus();
               target.click();
               const rect = target.getBoundingClientRect();
@@ -379,8 +407,8 @@ async function executeAction(page: Page, action: string, params: any) {
                 y: rect.y + rect.height / 2
               };
             }
-            return { success: false };
-          })(${params.index})`);
+            return { success: false, reason: 'not found' };
+          }, params.index);
           return indexResult;
         }
         if (params.selector) {
@@ -402,7 +430,7 @@ async function executeAction(page: Page, action: string, params: any) {
         
         // JS Fallback: If it's a focusable element, ensure it's focused and clicked
         await page.waitForTimeout(100);
-        const clickResult = await page.evaluate(`(function(x, y) {
+        const clickResult = await page.evaluate(({ x, y }) => {
           const getInteractiveElement = (x, y) => {
             const el = document.elementFromPoint(x, y);
             if (!el) return null;
@@ -434,14 +462,14 @@ async function executeAction(page: Page, action: string, params: any) {
             };
           }
           return null;
-        })(${clickX}, ${clickY})`);
+        }, { x: clickX, y: clickY });
         return { element: clickResult };
       case "clickByText":
         if (!params.text) throw new Error("Text is required for clickByText");
-        const textResult = await page.evaluate(`(function(text) {
-          const elements = Array.from(document.querySelectorAll('button, a, span, div, p, label'));
+        const textResult = await page.evaluate((text) => {
+          // Search for all interactive elements
+          const elements = Array.from(document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'));
           const target = elements.find(el => 
-            el.textContent?.trim().toLowerCase() === text.toLowerCase() ||
             el.textContent?.trim().toLowerCase().includes(text.toLowerCase())
           );
           if (target instanceof HTMLElement) {
@@ -458,7 +486,7 @@ async function executeAction(page: Page, action: string, params: any) {
             };
           }
           return { success: false };
-        })(${JSON.stringify(params.text)})`);
+        }, params.text);
         return textResult;
       case "clickBySelector":
         if (!params.selector) throw new Error("Selector is required for clickBySelector");
@@ -497,7 +525,7 @@ async function executeAction(page: Page, action: string, params: any) {
       case "type":
         if (params.index) {
           const typeResult = await page.evaluate(`(function(index, text, clear, pressEnter) {
-            const target = document.querySelector(`[data-agent-index="${index}"]`);
+            const target = document.querySelector('[data-agent-index="' + index + '"]');
             if (target instanceof HTMLElement) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
               target.focus();

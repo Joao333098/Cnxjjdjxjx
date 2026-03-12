@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import OpenAI from "openai";
 import { 
   Send, 
   Terminal, 
@@ -260,30 +259,31 @@ export default function App() {
     try {
       // Add a small delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 2000));
-      const apiKey = process.env.NOVA_API_KEY;
-      if (!apiKey) throw new Error("API Key missing");
       
-      const openai = new OpenAI({
-        baseURL: 'https://api.nova.amazon.com/v1',
-        apiKey
-      });
-      
-      const response = await openai.chat.completions.create({
-        model: "nova-pro-v1",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: systemPrompt },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshot}` } },
-              { type: "text", text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
-            ]
-          }
-        ],
-        response_format: { type: "json_object" }
+      const response = await fetch('/api/nova', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: systemPrompt },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshot}` } },
+                { type: "text", text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
+              ]
+            }
+          ],
+          response_format: { type: "json_object" }
+        })
       });
 
-      const text = response.choices[0].message.content;
+      if (!response.ok) throw new Error("Failed to call Nova API");
+      const data = await response.json();
+      
+      const text = data.choices[0].message.content;
       if (!text) throw new Error("Empty response from AI");
       
       const result = JSON.parse(text);
