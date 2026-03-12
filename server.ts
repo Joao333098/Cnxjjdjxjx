@@ -51,11 +51,11 @@ async function startServer() {
         if (!browser) {
           browser = await chromium.launch({ headless: true });
           browserContext = await browser.newContext({
-            viewport: { width: 390, height: 844 },
+            viewport: { width: 1280, height: 800 },
             deviceScaleFactor: 1,
-            isMobile: true,
-            hasTouch: true,
-            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            isMobile: false,
+            hasTouch: false,
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           });
           
           browserContext.on('page', (newPage: Page) => {
@@ -157,12 +157,12 @@ async function startServer() {
           const clickX = Math.round(x);
           const clickY = Math.round(y);
           
-          // Perform the actual click/tap
-          await activePage.touchscreen.tap(clickX, clickY);
+          // Perform the actual click
+          await activePage.mouse.click(clickX, clickY);
           
           // JS Fallback for manual clicks too
           await activePage.waitForTimeout(100);
-          await activePage.evaluate(({ x, y }) => {
+          await activePage.evaluate(`(function(x, y) {
             const getInteractiveElement = (x, y) => {
               const el = document.elementFromPoint(x, y);
               if (!el) return null;
@@ -188,7 +188,7 @@ async function startServer() {
               target.focus();
               target.click();
             }
-          }, { x: clickX, y: clickY });
+          })(${clickX}, ${clickY})`);
 
           // Trigger a screenshot update immediately with lower quality for speed
           const screenshot = await activePage.screenshot({ type: "jpeg", quality: 40 });
@@ -200,6 +200,51 @@ async function startServer() {
         } catch (e) {
           console.error("Manual click failed:", e);
         }
+      }
+    });
+
+    socket.on("execute-cli-command", async (command: string) => {
+      if (!activePage) {
+        socket.emit("agent-error", { message: "Browser not initialized." });
+        return;
+      }
+      
+      try {
+        console.log(`Executing CLI command: ${command}`);
+        const parts = command.split(' ');
+        if (parts[0] !== 'agent-browser') return;
+        
+        const action = parts[1];
+        let result;
+
+        switch (action) {
+          case 'navigate':
+          case 'open':
+            result = await executeAction(activePage, 'navigate', { url: parts[2] });
+            break;
+          case 'click':
+            result = await executeAction(activePage, 'click', { selector: parts[2] });
+            break;
+          case 'type':
+            result = await executeAction(activePage, 'type', { selector: parts[2], text: parts.slice(3).join(' ') });
+            break;
+          case 'get':
+            if (parts[2] === 'title') {
+              const title = await activePage.title();
+              socket.emit("action-result", { action: 'get title', result: title });
+              return;
+            }
+            break;
+          default:
+            socket.emit("agent-error", { message: `Command ${action} not implemented yet.` });
+            return;
+        }
+
+        const state = await capturePageState(activePage);
+        socket.emit("browser-update", state);
+        if (result) socket.emit("action-result", { action, result });
+      } catch (error) {
+        socket.emit("agent-error", { message: `Command failed: ${String(error)}` });
       }
     });
 
@@ -240,8 +285,9 @@ async function capturePageState(page: Page) {
       return node.childNodes.length === 1 && node.childNodes[0].nodeType === 3 && node.childNodes[0].textContent.trim().length > 0;
     };
 
+    let elementIndex = 0;
     const walk = (node, depth = 0) => {
-      if (depth > 15) return null; 
+      if (depth > 20) return null; 
       const rect = node.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return null;
 
@@ -265,6 +311,7 @@ async function capturePageState(page: Page) {
         ariaLabel: node.getAttribute("aria-label") || undefined,
         placeholder: node.placeholder || undefined,
         id: node.id || undefined,
+        name: node.getAttribute("name") || undefined,
         className: node.className?.slice(0, 50) || undefined,
         href: node.getAttribute("href") || undefined,
         title: node.getAttribute("title") || undefined,
@@ -273,6 +320,11 @@ async function capturePageState(page: Page) {
         w: Math.round(rect.width),
         h: Math.round(rect.height),
       };
+
+      if (interactive) {
+        info.index = ++elementIndex;
+        node.setAttribute('data-agent-index', info.index);
+      }
 
       if (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SELECT") {
         info.value = node.value;
@@ -298,8 +350,8 @@ async function capturePageState(page: Page) {
 async function executeAction(page: Page, action: string, params: any) {
   console.log(`Executing ${action} with params:`, params);
   
-  // Ensure viewport is consistent with the agent's view (iPhone 12/13/14 size)
-  await page.setViewportSize({ width: 390, height: 844 });
+  // Ensure viewport is consistent with the agent's view (Desktop size)
+  await page.setViewportSize({ width: 1280, height: 800 });
   
   try {
     switch (action) {
@@ -311,6 +363,30 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.waitForTimeout(2000); // Extra settling time
         break;
       case "click":
+        if (params.index) {
+          const indexResult = await page.evaluate(`(function(index) {
+            const target = document.querySelector('[data-agent-index="' + index + '"]');
+            if (target instanceof HTMLElement) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.focus();
+              target.click();
+              const rect = target.getBoundingClientRect();
+              return {
+                success: true,
+                tag: target.tagName.toLowerCase(),
+                id: target.id,
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2
+              };
+            }
+            return { success: false };
+          })(${params.index})`);
+          return indexResult;
+        }
+        if (params.selector) {
+          await page.click(params.selector, { timeout: 5000 });
+          return { success: true, selector: params.selector };
+        }
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
           throw new Error("Invalid coordinates for click");
         }
@@ -321,12 +397,12 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.mouse.move(clickX, clickY);
         await page.waitForTimeout(100);
         
-        // Perform the actual click/tap
-        await page.touchscreen.tap(clickX, clickY);
+        // Perform the actual click
+        await page.mouse.click(clickX, clickY);
         
-        // Fallback: If it's a focusable element, ensure it's focused and clicked
+        // JS Fallback: If it's a focusable element, ensure it's focused and clicked
         await page.waitForTimeout(100);
-        const clickResult = await page.evaluate(({ x, y }) => {
+        const clickResult = await page.evaluate(`(function(x, y) {
           const getInteractiveElement = (x, y) => {
             const el = document.elementFromPoint(x, y);
             if (!el) return null;
@@ -334,9 +410,9 @@ async function executeAction(page: Page, action: string, params: any) {
             const interactive = el.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
             if (interactive instanceof HTMLElement) return interactive;
             
-            const radius = 5;
-            for (let dx = -radius; dx <= radius; dx += 2) {
-              for (let dy = -radius; dy <= radius; dy += 2) {
+            const radius = 15; // Increased radius for desktop
+            for (let dx = -radius; dx <= radius; dx += 3) {
+              for (let dy = -radius; dy <= radius; dy += 3) {
                 const nearEl = document.elementFromPoint(x + dx, y + dy);
                 const nearInteractive = nearEl?.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
                 if (nearInteractive instanceof HTMLElement) return nearInteractive;
@@ -358,11 +434,11 @@ async function executeAction(page: Page, action: string, params: any) {
             };
           }
           return null;
-        }, { x: clickX, y: clickY });
+        })(${clickX}, ${clickY})`);
         return { element: clickResult };
       case "clickByText":
         if (!params.text) throw new Error("Text is required for clickByText");
-        const textResult = await page.evaluate((text) => {
+        const textResult = await page.evaluate(`(function(text) {
           const elements = Array.from(document.querySelectorAll('button, a, span, div, p, label'));
           const target = elements.find(el => 
             el.textContent?.trim().toLowerCase() === text.toLowerCase() ||
@@ -382,11 +458,11 @@ async function executeAction(page: Page, action: string, params: any) {
             };
           }
           return { success: false };
-        }, params.text);
+        })(${JSON.stringify(params.text)})`);
         return textResult;
       case "clickBySelector":
         if (!params.selector) throw new Error("Selector is required for clickBySelector");
-        const selectorResult = await page.evaluate((selector) => {
+        const selectorResult = await page.evaluate(`(function(selector) {
           const target = document.querySelector(selector);
           if (target instanceof HTMLElement) {
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -402,7 +478,7 @@ async function executeAction(page: Page, action: string, params: any) {
             };
           }
           return { success: false };
-        }, params.selector);
+        })(${JSON.stringify(params.selector)})`);
         return selectorResult;
       case "doubleClick":
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
@@ -419,14 +495,47 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.mouse.click(params.x, params.y, { button: 'right' });
         break;
       case "type":
+        if (params.index) {
+          const typeResult = await page.evaluate(`(function(index, text, clear, pressEnter) {
+            const target = document.querySelector(`[data-agent-index="${index}"]`);
+            if (target instanceof HTMLElement) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.focus();
+              if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+                if (clear) target.value = "";
+                target.value += text;
+                if (pressEnter) {
+                  const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                  target.dispatchEvent(event);
+                }
+              }
+              const rect = target.getBoundingClientRect();
+              return {
+                success: true,
+                tag: target.tagName.toLowerCase(),
+                id: target.id,
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2
+              };
+            }
+            return { success: false };
+          })(${params.index}, ${JSON.stringify(params.text)}, ${params.clear}, ${params.pressEnter})`);
+          return typeResult;
+        }
+        if (params.selector) {
+          if (params.clear) await page.fill(params.selector, "");
+          await page.type(params.selector, params.text || "", { delay: 30 });
+          if (params.pressEnter) await page.keyboard.press("Enter");
+          return { success: true, selector: params.selector };
+        }
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
           throw new Error("Invalid coordinates for type");
         }
         const typeX = Math.max(0, params.x);
         const typeY = Math.max(0, params.y);
 
-        // Tap to focus first
-        await page.touchscreen.tap(typeX, typeY);
+        // Click to focus first
+        await page.mouse.click(typeX, typeY);
         await page.waitForTimeout(200);
         
         // JS Fallback for focus
@@ -437,7 +546,7 @@ async function executeAction(page: Page, action: string, params: any) {
             const input = el.closest('input, textarea, [contenteditable="true"]');
             if (input instanceof HTMLElement) return input;
             
-            const radius = 5;
+            const radius = 10;
             for (let dx = -radius; dx <= radius; dx += 2) {
               for (let dy = -radius; dy <= radius; dy += 2) {
                 const nearEl = document.elementFromPoint(x + dx, y + dy);
@@ -449,7 +558,12 @@ async function executeAction(page: Page, action: string, params: any) {
           };
 
           const target = getInteractiveElement(x, y);
-          if (target) target.focus();
+          if (target) {
+            target.focus();
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+              target.select();
+            }
+          }
         }, { x: typeX, y: typeY });
         await page.waitForTimeout(200);
         
@@ -460,25 +574,54 @@ async function executeAction(page: Page, action: string, params: any) {
           await page.keyboard.up('Control');
           await page.keyboard.press('Backspace');
         }
-        await page.keyboard.type(params.text || "", { delay: 30 });
+        await page.keyboard.type(params.text || "", { delay: 50 });
         if (params.pressEnter) {
-          await page.waitForTimeout(200);
+          await page.waitForTimeout(300);
           await page.keyboard.press("Enter");
         }
         break;
+      case "fill":
+        if (params.selector) {
+          await page.fill(params.selector, params.text || "");
+          return { success: true, selector: params.selector };
+        }
+        // If no selector, use type logic
+        return await executeAction(page, "type", { ...params, clear: true });
+      case "find":
+        // Support for agent-browser find role <role> <action> [value]
+        const { role, text: findText, label, placeholder, action: findAction, value: findValue, name: findName } = params;
+        let locator;
+        if (role) {
+          locator = page.getByRole(role as any, { name: findName });
+        } else if (findText) {
+          locator = page.getByText(findText);
+        } else if (label) {
+          locator = page.getByLabel(label);
+        } else if (placeholder) {
+          locator = page.getByPlaceholder(placeholder);
+        }
+        
+        if (locator) {
+          const firstLocator = locator.first();
+          if (findAction === "click") await firstLocator.click();
+          else if (findAction === "fill") await firstLocator.fill(findValue || "");
+          else if (findAction === "type") await firstLocator.type(findValue || "");
+          return { success: true };
+        }
+        throw new Error("No locator criteria provided for find");
       case "scroll":
         const scrollAmount = params.amount || 500;
         if (params.direction === "down") {
-          await page.evaluate((amt) => window.scrollBy(0, amt), scrollAmount);
+          await page.evaluate(`window.scrollBy(0, ${scrollAmount})`);
           await page.mouse.wheel(0, scrollAmount);
         } else if (params.direction === "up") {
-          await page.evaluate((amt) => window.scrollBy(0, -amt), scrollAmount);
+          await page.evaluate(`window.scrollBy(0, -${scrollAmount})`);
           await page.mouse.wheel(0, -scrollAmount);
         } else if (params.direction === "right") {
-          await page.evaluate((amt) => window.scrollBy(amt, 0), scrollAmount);
+          await page.evaluate(`window.scrollBy(${scrollAmount}, 0)`);
           await page.mouse.wheel(scrollAmount, 0);
         } else if (params.direction === "left") {
-          await page.evaluate((amt) => window.scrollBy(-amt, 0), scrollAmount);
+          await page.evaluate(`window.scrollBy(-${scrollAmount}, 0)`);
           await page.mouse.wheel(-scrollAmount, 0);
         }
         break;
@@ -504,6 +647,27 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.reload();
         break;
       case "hover":
+        if (params.index) {
+          const hoverResult = await page.evaluate((index) => {
+            const target = document.querySelector(`[data-agent-index="${index}"]`);
+            if (target instanceof HTMLElement) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              const rect = target.getBoundingClientRect();
+              return {
+                success: true,
+                tag: target.tagName.toLowerCase(),
+                id: target.id,
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2
+              };
+            }
+            return { success: false };
+          }, params.index);
+          if (hoverResult.success) {
+            await page.mouse.move(hoverResult.x, hoverResult.y);
+          }
+          return hoverResult;
+        }
         await page.mouse.move(params.x, params.y);
         break;
       case "pressKey":

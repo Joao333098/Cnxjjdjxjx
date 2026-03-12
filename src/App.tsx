@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { 
   Send, 
   Terminal, 
@@ -43,7 +43,7 @@ export default function App() {
   const [browserInfo, setBrowserInfo] = useState({ url: '', title: '', accessibilityTree: null as any });
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isLocked, setIsLocked] = useState(false);
-  const [previewScale, setPreviewScale] = useState(0.5);
+  const [previewScale, setPreviewScale] = useState(0.4);
   const [manualUrl, setManualUrl] = useState('');
   const [stepCount, setStepCount] = useState(0);
   const [currentPlan, setCurrentPlan] = useState<string[]>([]);
@@ -136,11 +136,13 @@ export default function App() {
       if (data.action === 'getHtml') {
         setLastHtml(data.result.html);
         setActiveTab('console');
-      } else if (data.action === 'click' || data.action === 'clickByText' || data.action === 'clickBySelector') {
+      } else if (['click', 'clickByText', 'clickBySelector', 'type', 'fill', 'find'].includes(data.action)) {
         if (data.result?.element || data.result?.success) {
           const el = data.result.element || data.result;
-          const label = el.text || el.id || el.tag || 'Element';
-          setLastClick(prev => prev ? { ...prev, label } : { x: el.x, y: el.y, label });
+          const label = el.text || el.id || el.tag || el.selector || 'Action';
+          if (el.x && el.y) {
+            setLastClick({ x: el.x, y: el.y, label });
+          }
         }
       }
     });
@@ -190,36 +192,58 @@ export default function App() {
 
       HUMAN-LIKE REASONING:
       - Think like a human user. Look at the visual cues (colors, icons, layout).
-      - PRECISION: When clicking, aim for the EXACT center of the element. Use the screenshot to verify the coordinates.
+      - PRECISION: When clicking, aim for the EXACT center of the element.
+      - SELECTORS: Use selectors (ID, class) whenever possible for 100% accuracy.
+      - FORMS: If you need to write, use the 'fill' or 'type' tool with a selector.
+      - SEARCH: Use 'find' to locate elements by their semantic role (e.g., 'textbox', 'button').
       - SELF-CORRECTION: If the last action didn't work (e.g., page didn't change, error in console), EXPLAIN WHY and try a different approach.
-      - If you are stuck on a login page, check if you need to type or click a specific button.
-      - If you see a search bar, use it. If you see a button that looks like "Login", click it.
+      - If you see a square/icon instead of a name, it might be a button or a link. Use 'getHtml' to inspect it.
       - Don't just follow the accessibility tree; use the screenshot to understand the visual hierarchy.
-      - Be decisive. If one path fails, try another.
       - INFINITE PROGRESSION: Do not stop until the goal is 100% achieved.
-      - If the page hasn't changed after an action, try a different approach or click a slightly different coordinate.
+      
+      CAPTCHA HANDLING:
+      - If you encounter a CAPTCHA in an image:
+        1. Read the image and extract the text.
+        2. Find the input field. DO NOT CLICK THE FIRST TEXTBOX YOU SEE.
+        3. Inspect the attributes of all textboxes (name, aria-label, placeholder).
+           - The email field usually has 'email', 'user', or 'login' in its attributes.
+           - The CAPTCHA field usually has 'captcha', 'code', 'type the text', or similar in its attributes.
+        4. IF THE FIELD HAS AN INDEX: Click to focus, then type with a delay.
+        5. IF THE FIELD HAS NO INDEX (MISSING TAG):
+           - Strategy A (Tab Navigation): Click a nearby element with an index (like an audio icon) to focus the area, then use 'pressKey' with 'Tab' to move to the CAPTCHA input.
+           - Strategy B (CSS Selector): Use 'type' or 'fill' with a specific selector, e.g., 'input[aria-label="Type the text you hear or see"]'.
+        6. Type the text with a delay (use 'type' tool).
+        7. Wait 1-2 seconds after typing.
+        8. Click the 'Next' or 'Próxima' button.
+      - If you accidentally fill the wrong field (e.g., email field), use 'type' with 'clear: true' to empty it, then try the correct field again.
+      - If the action fails, explain why and try a different approach (e.g., different selector, different wait time).
       
       Current Context:
       - URL: ${url}
       - Title: ${title}
-      - Viewport: Mobile (390x844)
+      - Viewport: Desktop (1280x800)
       
       INSTRUCTIONS:
       1. Analyze the provided screenshot, console logs, and accessibility tree.
       2. Choose the BEST tool for the next immediate action.
-      3. Provide a brief PLAN (next 3-5 steps) to show you are thinking ahead.
+      3. PRECISION: Use the 'index' parameter in click/type tools whenever possible. Interactive elements in the accessibility tree have a unique 'index'.
+      4. Provide a brief PLAN (next 3-5 steps) to show you are thinking ahead.
       
       TOOLS:
       - navigate(url: string)
-      - click(x: number, y: number) // Click by coordinates. Use as fallback.
+      - click(x: number, y: number, selector?: string, index?: number) // Click by coordinates, selector, or index. PREFER INDEX.
       - clickByText(text: string) // BEST for buttons and links with clear text.
       - clickBySelector(selector: string) // BEST for specific elements with ID or unique class.
-      - type(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
+      - type(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean, selector?: string, index?: number) // PREFER INDEX.
+      - fill(selector: string, text: string, index?: number) // Clear and fill an input.
+      - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string) // Semantic search.
       - scroll(direction: "up" | "down", amount: number)
-      - wait(ms: number)
+      - wait(ms: number) // Use this if you know a page is loading.
+      - waitForSelector(selector: string) // Use this to wait for a specific element to appear.
       - goBack(), reload()
-      - bypassVideo()
+      - bypassVideo() // Use this if you encounter a video that must be watched.
       - closePopup()
+      - hover(x: number, y: number, index?: number) // Hover over an element. PREFER INDEX.
       - runJs(code: string) // Use this to inject scripts, fix page issues, or modify HTML
       - getHtml(selector?: string) // Use this to see the raw HTML of a specific element (defaults to body)
       - finish(message: string)
@@ -234,26 +258,32 @@ export default function App() {
     `;
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      // Add a small delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const apiKey = process.env.NOVA_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
       
-      const ai = new GoogleGenAI({ apiKey });
+      const openai = new OpenAI({
+        baseURL: 'https://api.nova.amazon.com/v1',
+        apiKey
+      });
       
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
+      const response = await openai.chat.completions.create({
+        model: "nova-pro-v1",
+        messages: [
           {
-            parts: [
-              { text: systemPrompt },
-              { inlineData: { mimeType: "image/jpeg", data: screenshot } },
-              { text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
-            ],
-          },
+            role: "user",
+            content: [
+              { type: "text", text: systemPrompt },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshot}` } },
+              { type: "text", text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
+            ]
+          }
         ],
-        config: { responseMimeType: "application/json" },
+        response_format: { type: "json_object" }
       });
 
-      const text = response.text;
+      const text = response.choices[0].message.content;
       if (!text) throw new Error("Empty response from AI");
       
       const result = JSON.parse(text);
@@ -375,8 +405,8 @@ export default function App() {
     if (!socket || isProcessing) return;
     
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 390;
-    const y = ((e.clientY - rect.top) / rect.height) * 844;
+    const x = ((e.clientX - rect.left) / rect.width) * 1280;
+    const y = ((e.clientY - rect.top) / rect.height) * 800;
     
     // Check if we clicked an input to trigger the keyboard
     if (browserInfo.accessibilityTree) {
@@ -525,6 +555,38 @@ export default function App() {
 
         {/* Browser Content */}
         <div className="flex-1 relative overflow-hidden bg-[#050505] flex items-center justify-center group">
+          
+          {/* Manual Control Panel */}
+          <div className="absolute bottom-6 left-6 z-40 bg-black/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Manual</span>
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            </div>
+            <input 
+              ref={keyboardInputRef}
+              type="text"
+              value={keyboardText}
+              onChange={(e) => setKeyboardText(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleKeyboardSubmit(e as any)}
+              placeholder="Type here..."
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-white font-mono outline-none focus:border-emerald-500 w-40"
+            />
+            <button 
+              onClick={() => {
+                if (lastClick) {
+                  socket?.emit('execute-action', { 
+                    action: 'type', 
+                    params: { x: lastClick.x, y: lastClick.y, text: keyboardText, pressEnter: true } 
+                  });
+                  setKeyboardText('');
+                }
+              }}
+              className="px-3 py-1.5 bg-emerald-500 text-black text-[10px] font-bold uppercase tracking-widest rounded-lg hover:bg-emerald-400 transition-colors"
+            >
+              Type
+            </button>
+          </div>
+
           {/* Agent HUD - Floating Status Overlay */}
           <AnimatePresence>
             {isProcessing && (
@@ -663,6 +725,19 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                <div className="p-4 border-t border-white/10 bg-black">
+                  <input 
+                    type="text"
+                    placeholder="agent-browser ..."
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white font-mono outline-none focus:border-emerald-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        socket?.emit('execute-cli-command', e.currentTarget.value);
+                        e.currentTarget.value = '';
+                      }
+                    }}
+                  />
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -671,23 +746,18 @@ export default function App() {
             <div className="relative flex items-center justify-center p-4 md:p-8 w-full h-full overflow-auto scrollbar-hide">
               <div 
                 style={{ 
-                  width: '390px', 
-                  height: '844px', 
+                  width: '1280px', 
+                  height: '800px', 
                   transform: `scale(${previewScale})`,
                   transformOrigin: 'center center',
                   transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                   margin: 'auto',
-                  boxSizing: 'content-box' // Ensure border doesn't shrink the content area
+                  boxSizing: 'content-box'
                 }}
-                className="relative flex-shrink-0 shadow-[0_0_100px_rgba(0,0,0,0.8)] rounded-[3.5rem] border-[12px] border-[#1a1a1a] bg-white"
+                className="relative flex-shrink-0 shadow-[0_0_100px_rgba(0,0,0,0.8)] rounded-xl border-[8px] border-[#1a1a1a] bg-white"
               >
-                {/* Inner container that is exactly 390x844 */}
-                <div className="relative w-full h-full rounded-[2.5rem] overflow-hidden">
-                  {/* iPhone Notch/Dynamic Island */}
-                  <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-7 bg-black rounded-b-2xl z-50 flex items-center justify-center">
-                    <div className="w-12 h-1 bg-zinc-800 rounded-full" />
-                  </div>
-
+                {/* Inner container that is exactly 1280x800 */}
+                <div className="relative w-full h-full rounded-lg overflow-hidden">
                   <img
                     src={screenshot}
                     alt="Browser Preview"
@@ -745,7 +815,7 @@ export default function App() {
                         const elements: any[] = [];
                         const flatten = (node: any) => {
                           if (node.w > 0 && node.h > 0) {
-                            const isClickable = ['button', 'a', 'input', 'textarea', 'select'].includes(node.tag) || node.role === 'button' || node.role === 'link';
+                            const isClickable = ['button', 'a', 'input', 'textarea', 'select'].includes(node.tag) || node.role === 'button' || node.role === 'link' || node.index;
                             if (isClickable) elements.push(node);
                           }
                           if (node.children) node.children.forEach(flatten);
@@ -754,30 +824,36 @@ export default function App() {
                         return elements.map((el, i) => (
                           <div 
                             key={i}
-                            className="absolute border border-emerald-500/30 bg-emerald-500/5"
+                            className="absolute border border-emerald-500/30 bg-emerald-500/5 flex items-center justify-center"
                             style={{ left: el.x, top: el.y, width: el.w, height: el.h }}
-                          />
+                          >
+                            {el.index && (
+                              <div className="bg-emerald-500 text-black text-[10px] font-black px-1 rounded-sm shadow-lg">
+                                {el.index}
+                              </div>
+                            )}
+                          </div>
                         ));
                       })()}
                     </div>
                   )}
 
-                  {/* Last Click Indicator */}
+                  {/* Last Click/Action Indicator */}
                   {lastClick && (
                     <motion.div 
-                      initial={{ scale: 2, opacity: 0 }}
+                      initial={{ scale: 1.5, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       className="absolute z-50 pointer-events-none flex flex-col items-center"
                       style={{ left: lastClick.x, top: lastClick.y }}
                     >
-                      <div className="w-8 h-8 -ml-4 -mt-4 border-2 border-emerald-500 rounded-full flex items-center justify-center">
-                        <div className="w-1 h-1 bg-emerald-500 rounded-full animate-ping" />
+                      <div className="w-10 h-10 -ml-5 -mt-5 border-2 border-emerald-500 rounded-lg flex items-center justify-center bg-emerald-500/10 shadow-[0_0_15px_rgba(16,185,129,0.5)]">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-sm animate-pulse" />
                       </div>
                       {lastClick.label && (
                         <motion.div 
                           initial={{ opacity: 0, y: 5 }}
                           animate={{ opacity: 1, y: 0 }}
-                          className="mt-2 px-2 py-1 bg-emerald-500 text-black text-[10px] font-bold rounded shadow-lg whitespace-nowrap"
+                          className="mt-2 px-2 py-1 bg-emerald-500 text-black text-[10px] font-black rounded shadow-2xl whitespace-nowrap uppercase tracking-tighter"
                         >
                           {lastClick.label}
                         </motion.div>
