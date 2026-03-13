@@ -16,6 +16,8 @@ const io = new Server(server, {
   cors: {
     origin: "*",
   },
+  transports: ["polling", "websocket"],
+  allowUpgrades: true,
 });
 
 const PORT = 5000;
