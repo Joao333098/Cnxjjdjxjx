@@ -16,8 +16,8 @@ const io = new Server(server, {
   cors: {
     origin: "*",
   },
-  transports: ["polling", "websocket"],
-  allowUpgrades: true,
+  transports: ["polling"],
+  allowUpgrades: false,
 });
 
 const PORT = 5000;
@@ -30,6 +30,13 @@ async function startServer() {
 
   app.use(cors());
   app.use(express.json());
+
+  // Rewrite Host header so Vite's host-check middleware always accepts the request
+  // regardless of the public domain used by the Replit proxy
+  app.use((req, _res, next) => {
+    req.headers.host = `localhost:${PORT}`;
+    next();
+  });
   
   let activePage: Page | null = null;
   let browserContext: any = null;
@@ -60,7 +67,7 @@ async function startServer() {
   // Vite middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: "spa",
     });
     app.use(vite.middlewares);

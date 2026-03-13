@@ -82,7 +82,7 @@ export default function App() {
   }, [isLocked, status, isContinuous]);
 
   useEffect(() => {
-    const newSocket = io({ transports: ['polling', 'websocket'] });
+    const newSocket = io({ transports: ['polling'] });
     setSocket(newSocket);
 
     newSocket.on('connect', () => setConnected(true));
