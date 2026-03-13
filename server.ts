@@ -18,7 +18,7 @@ const io = new Server(server, {
   },
 });
 
-const PORT = 3000;
+const PORT = 5000;
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
