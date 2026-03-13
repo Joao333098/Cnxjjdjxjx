@@ -16,11 +16,9 @@ const io = new Server(server, {
   cors: {
     origin: "*",
   },
-  transports: ["polling"],
-  allowUpgrades: false,
 });
 
-const PORT = parseInt(process.env.PORT || "5000", 10);
+const PORT = 3000;
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
@@ -30,13 +28,6 @@ async function startServer() {
 
   app.use(cors());
   app.use(express.json());
-
-  // Rewrite Host header so Vite's host-check middleware always accepts the request
-  // regardless of the public domain used by the Replit proxy
-  app.use((req, _res, next) => {
-    req.headers.host = `localhost:${PORT}`;
-    next();
-  });
   
   let activePage: Page | null = null;
   let browserContext: any = null;
@@ -64,22 +55,13 @@ async function startServer() {
     }
   });
 
-  // Vite middleware (dev) or static files (production)
+  // Vite middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true, allowedHosts: true, hmr: false },
+      server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    const { default: path } = await import("path");
-    const { fileURLToPath } = await import("url");
-    const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const distPath = path.join(__dirname, "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
   }
 
   // Socket.io logic
