@@ -41,3 +41,8 @@ externalPort = 5000
 [[ports]]
 localPort = 24678
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+VITE_NOVA_API_KEY = "7505af6f-584e-4667-a521-4054123b54c6"

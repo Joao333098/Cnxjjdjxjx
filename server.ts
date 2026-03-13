@@ -55,8 +55,7 @@ async function startServer() {
 
       const isOpenRouter = apiKey.startsWith('sk-or-');
       const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
-      // Nova Premier: most capable model, supports multimodal (images + text), 1M context
-      const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-premier-v1';
+      const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : (process.env.NOVA_MODEL || 'AGENT-63255618a3b04b6caab74c0f0ae7be5c');
 
       // Make raw fetch so we can inspect the actual response body on errors
       const rawResponse = await fetch(`${baseURL}/chat/completions`, {
