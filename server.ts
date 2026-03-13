@@ -730,8 +730,7 @@ async function executeAction(page: Page, action: string, params: any) {
             } catch (_) {}
           }
         }
-        result = { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
-        break;
+        return { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
       }
       case "forceTypeAt": {
         // Force-type by directly injecting value via JavaScript (bypasses focus/iframe issues)
@@ -795,8 +794,7 @@ async function executeAction(page: Page, action: string, params: any) {
             } catch (_) {}
           }
         }
-        result = { success: ftDone, verified: ftVerified };
-        break;
+        return { success: ftDone, verified: ftVerified };
       }
       case "type":
         if (params.index !== undefined) {
