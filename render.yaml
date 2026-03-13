@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: omnibrowser
+    runtime: node
+    buildCommand: npm install && npx playwright install chromium && npx playwright install-deps chromium && npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: VITE_NOVA_API_KEY
+        sync: false

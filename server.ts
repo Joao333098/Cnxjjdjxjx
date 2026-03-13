@@ -20,7 +20,7 @@ const io = new Server(server, {
   allowUpgrades: false,
 });
 
-const PORT = 5000;
+const PORT = parseInt(process.env.PORT || "5000", 10);
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
@@ -64,13 +64,22 @@ async function startServer() {
     }
   });
 
-  // Vite middleware
+  // Vite middleware (dev) or static files (production)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true, allowedHosts: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);
+  } else {
+    const { default: path } = await import("path");
+    const { fileURLToPath } = await import("url");
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const distPath = path.join(__dirname, "dist");
+    app.use(express.static(distPath));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
   }
 
   // Socket.io logic
