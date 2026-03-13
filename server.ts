@@ -812,6 +812,42 @@ async function executeAction(page: Page, action: string, params: any) {
           }
           if (tbsTyped) break;
         }
+        if (!tbsTyped) {
+          // Last resort: click the currently focused element (or first visible input) and type with keyboard
+          try {
+            const focused = await page.evaluate(`(function() {
+              const el = document.activeElement;
+              if (el && el !== document.body && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+                const r = el.getBoundingClientRect();
+                return { x: r.x + r.width/2, y: r.y + r.height/2 };
+              }
+              // Find first visible unfilled input
+              const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+              const visible = inputs.find(inp => {
+                const s = window.getComputedStyle(inp);
+                if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+                const r = inp.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              });
+              if (visible) {
+                const r = visible.getBoundingClientRect();
+                return { x: r.x + r.width/2, y: r.y + r.height/2 };
+              }
+              return null;
+            })()`);
+            if (focused && typeof focused.x === 'number') {
+              await page.mouse.click(focused.x, focused.y);
+              await page.waitForTimeout(150);
+              await page.keyboard.down('Control');
+              await page.keyboard.press('a');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+              await page.keyboard.type(params.text || "", { delay: 40 });
+              if (params.pressEnter) await page.keyboard.press('Enter');
+              tbsTyped = true;
+            }
+          } catch (_) {}
+        }
         if (!tbsTyped) throw new Error(`typeBySelector: element not found with selector "${params.selector}" (also tried: ${tbsUniq.slice(1).join(', ')})`);
         return { success: true, selector: params.selector };
       }

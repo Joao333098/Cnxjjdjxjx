@@ -211,30 +211,45 @@ export default function App() {
         - NEVER attempt typeBySelector for CAPTCHA fields — they are often in iframes or shadow DOM and the selector fails.
         - NEVER try to guess or fabricate CAPTCHA text — always call waitForUser.
 
-      RULE 4 - AUTO-RECOVERY FROM WRONG ACTIONS:
-      - After EVERY action, compare the new page state to what you expected.
-      - If you clicked something and landed on an unexpected page (e.g., a "Create account" page when you wanted to log in):
-        * IMMEDIATELY call goBack() to return to the previous page.
-        * Then explain what went wrong in your thought and choose the correct action.
-      - If you typed in the wrong field (field that already had content changed):
-        * IMMEDIATELY use type(index=<wrong_field_index>, text="", clear=true) to erase it.
-        * Then type in the correct field using a selector or the correct index.
-      - If a popup appeared unexpectedly, use closePopup() then continue.
-      
-      RULE 3 - FIELD ALREADY FILLED = DO NOT TOUCH IT:
-      - If the accessibility tree or screenshot shows a field already has content (e.g., email already typed), DO NOT type in that field again.
-      - Look at the screenshot: fields with text already in them are DONE. Move to the next empty required field.
+      RULE 3 - VERIFY BEFORE PROCEEDING (MOST IMPORTANT):
+      - After EVERY action, look at the new screenshot BEFORE doing anything else.
+      - Ask yourself: "Did my last action succeed?"
+        * After typing in a field → check the field shows the text I typed. If empty or wrong, try again with typeAt(x, y, text).
+        * After clicking "Next" / "Submit" → check if the page actually advanced to a new step/page. If NOT (same page), there is an error — read it and fix it before clicking again.
+        * After solving a CAPTCHA → check if the CAPTCHA image is gone. If still visible, the answer was wrong — call waitForUser again.
+        * After a navigation → check the URL and page content match what was expected.
+      - NEVER click "Next" or "Submit" if any required field is still empty or shows an error border/message.
+      - If you see a red error message on the page (e.g. "Wrong password", "Invalid CAPTCHA", "Field required"), STOP and fix the error before continuing.
 
-      RULE 4 - CORRECT SELECTORS FOR COMMON FIELDS:
-      - Password field → ALWAYS use selector: 'input[type="password"]'  (NEVER input[name="password"])
-      - Email field    → ALWAYS use selector: 'input[type="email"]'
-      - Search field   → use 'input[type="search"]' or 'input[name="q"]'
-      - Username       → 'input[name="username"],input[name="identifier"],input[type="text"]'
+      RULE 4 - FIELD TYPING — USE COORDINATES WHEN SELECTORS FAIL:
+      - BEST method for any field: look at the screenshot, identify the field visually, use typeAt(x, y, text) with its CENTER pixel coordinates.
+      - Accessibility tree index: if the field has an index number in the tree, use type(index=N, text=...) — very reliable.
+      - typeBySelector: only use when you are certain of the selector. If the LAST ACTION was a typeBySelector error, switch to typeAt(x, y) immediately.
+      - Password field coords: look at the screenshot for a masked (●●●●) input box and note its center X, Y.
+      - NEVER repeat the same failed typeBySelector call — always switch to a different method.
+
+      RULE 5 - AUTO-RECOVERY FROM WRONG ACTIONS:
+      - If you clicked something and landed on an unexpected page: call goBack() immediately, then try again.
+      - If you typed in the wrong field: erase it with type(index=N, text="", clear=true), then type in the correct field.
+      - If a popup appeared unexpectedly: use closePopup() then continue.
+      - If the last action produced an error in LAST ACTION: do NOT repeat the same action — choose a completely different approach.
+
+      RULE 6 - FIELD ALREADY FILLED = DO NOT TOUCH IT:
+      - If the accessibility tree or screenshot shows a field already has content, DO NOT type in that field again.
+      - Fields with text already in them are DONE. Move to the next empty required field.
+
+      ===== STEP-BY-STEP VERIFICATION CHECKLIST =====
+      Before choosing your next action, answer these in your "thought":
+      1. What did my LAST ACTION do?
+      2. Did it succeed? (look at the screenshot — field filled? page changed? error visible?)
+      3. If it failed: what went wrong and what different approach will I use?
+      4. What is the NEXT required action to make progress toward the goal?
+      5. Are ALL previous required fields correctly filled before I click Next/Submit?
 
       ===== GENERAL REASONING =====
-      - Think like a careful human. Look at visual cues, colors, layout.
-      - PRECISION: Use element index whenever available. It is 100% accurate.
-      - SELF-CORRECTION: If last action failed (page unchanged, error in console), explain why and try a completely different approach.
+      - Think like a careful human. Look at visual cues, colors, layout, error messages.
+      - PRECISION: Use element coordinates from the screenshot whenever possible.
+      - SELF-CORRECTION: If last action failed, explain why and try a completely different approach.
       - INFINITE PROGRESSION: Do not stop until the goal is 100% achieved.
       
       Current Context:
@@ -243,10 +258,11 @@ export default function App() {
       - Viewport: Desktop (1280x800)
       
       INSTRUCTIONS:
-      1. Look at the screenshot carefully. Identify what is ALREADY done vs what still needs to be done.
-      2. Check if any button you're about to click is outside the scope of the user goal. If yes, skip it.
-      3. If a CAPTCHA is visible, call waitForUser() with the coordinates of the CAPTCHA input box — do NOT attempt typeBySelector.
-      4. Choose the BEST tool and provide a brief PLAN (next 3-5 steps).
+      1. Look at the screenshot carefully. Run through the VERIFICATION CHECKLIST above.
+      2. Check for any error messages, empty required fields, or unchanged pages from last action.
+      3. If a CAPTCHA is visible, call waitForUser() with the coordinates of the CAPTCHA input box.
+      4. If last action was a typeBySelector failure, switch to typeAt(x, y, text) using visual coordinates.
+      5. Choose the BEST next action and provide a brief PLAN.
       
       TOOLS:
       - navigate(url: string)
@@ -277,7 +293,7 @@ export default function App() {
       - DO NOT use unescaped newlines in strings.
       - Return ONLY a valid JSON object.
       {
-        "thought": "Step-by-step reasoning. State what fields are already filled. State which field needs action. If CAPTCHA, state what the CAPTCHA image says and which field index/selector is the CAPTCHA input.",
+        "thought": "VERIFICATION FIRST: (1) What did my last action do? (2) Did it succeed — check the screenshot for filled fields, page change, or error messages. (3) If it failed, what went wrong and what different approach will I use now? (4) What is the next action needed? (5) Are all required fields filled before I click Next/Submit?",
         "plan": ["step 1", "step 2", "step 3", "step 4", "step 5"],
         "action": "tool_name",
         "params": { ... }
