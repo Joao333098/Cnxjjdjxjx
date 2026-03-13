@@ -489,56 +489,40 @@ async function executeAction(page: Page, action: string, params: any) {
         
         // JS Fallback
         await page.waitForTimeout(100);
-        const clickAtResult = await page.evaluate(({ x, y }) => {
-          const getInteractiveElement = (x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return null;
-            const interactive = el.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
-            if (interactive instanceof HTMLElement) return interactive;
-            const radius = 5;
-            for (let dx = -radius; dx <= radius; dx += 2) {
-              for (let dy = -radius; dy <= radius; dy += 2) {
-                const nearEl = document.elementFromPoint(x + dx, y + dy);
-                const nearInteractive = nearEl?.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
-                if (nearInteractive instanceof HTMLElement) return nearInteractive;
+        const clickAtResult = await page.evaluate(`(function(x, y) {
+          var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
+          var el = document.elementFromPoint(x, y);
+          if (!el) return { success: false, reason: 'no element at coordinates' };
+          var target = el.closest(sel);
+          if (!target) {
+            for (var dx = -5; dx <= 5; dx += 2) {
+              for (var dy = -5; dy <= 5; dy += 2) {
+                var near = document.elementFromPoint(x+dx, y+dy);
+                if (near) { target = near.closest(sel); if (target) break; }
               }
+              if (target) break;
             }
-            return el instanceof HTMLElement ? el : null;
-          };
-
-          const target = getInteractiveElement(x, y);
-          if (target) {
-            target.focus();
-            target.click();
-            return { success: true, tag: target.tagName.toLowerCase(), id: target.id };
           }
+          if (!target) target = el;
+          if (target) { target.focus(); target.click(); return { success: true, tag: target.tagName.toLowerCase(), id: target.id }; }
           return { success: false, reason: 'no interactive element found at coordinates' };
-        }, { x: clickAtX, y: clickAtY });
-        
+        })(${clickAtX}, ${clickAtY})`);
         return clickAtResult;
       case "click":
         if (params.index !== undefined) {
-          const indexResult = await page.evaluate((index) => {
-            const target = document.querySelector(`[data-agent-index="${index}"]`);
-            if (target instanceof HTMLElement) {
+          const indexResult = await page.evaluate(`(function(index) {
+            var target = document.querySelector('[data-agent-index="' + index + '"]');
+            if (target) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              // Ensure it's visible
-              const style = window.getComputedStyle(target);
+              var style = window.getComputedStyle(target);
               if (style.display === 'none' || style.visibility === 'hidden') return { success: false, reason: 'hidden' };
-              
               target.focus();
               target.click();
-              const rect = target.getBoundingClientRect();
-              return {
-                success: true,
-                tag: target.tagName.toLowerCase(),
-                id: target.id,
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2
-              };
+              var rect = target.getBoundingClientRect();
+              return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
             }
             return { success: false, reason: 'not found' };
-          }, params.index);
+          })(${JSON.stringify(params.index)})`);
           return indexResult;
         }
         if (params.selector) {
@@ -560,63 +544,43 @@ async function executeAction(page: Page, action: string, params: any) {
         
         // JS Fallback: If it's a focusable element, ensure it's focused and clicked
         await page.waitForTimeout(100);
-        const clickResult = await page.evaluate(({ x, y }) => {
-          const getInteractiveElement = (x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return null;
-            
-            const interactive = el.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
-            if (interactive instanceof HTMLElement) return interactive;
-            
-            const radius = 15; // Increased radius for desktop
-            for (let dx = -radius; dx <= radius; dx += 3) {
-              for (let dy = -radius; dy <= radius; dy += 3) {
-                const nearEl = document.elementFromPoint(x + dx, y + dy);
-                const nearInteractive = nearEl?.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
-                if (nearInteractive instanceof HTMLElement) return nearInteractive;
+        const clickResult = await page.evaluate(`(function(x, y) {
+          var el = document.elementFromPoint(x, y);
+          if (!el) return null;
+          var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
+          var target = el.closest(sel);
+          if (!target) {
+            for (var dx = -15; dx <= 15; dx += 3) {
+              for (var dy = -15; dy <= 15; dy += 3) {
+                var near = document.elementFromPoint(x + dx, y + dy);
+                if (near) { target = near.closest(sel); if (target) break; }
               }
+              if (target) break;
             }
-            return el instanceof HTMLElement ? el : null;
-          };
-
-          const target = getInteractiveElement(x, y);
+          }
+          if (!target) target = el;
           if (target) {
             target.focus();
             target.click();
-            return {
-              tag: target.tagName.toLowerCase(),
-              id: target.id,
-              className: target.className,
-              text: target.innerText?.slice(0, 50),
-              role: target.getAttribute('role')
-            };
+            return { tag: target.tagName.toLowerCase(), id: target.id, className: target.className, text: (target.innerText||'').slice(0,50), role: target.getAttribute('role') };
           }
           return null;
-        }, { x: clickX, y: clickY });
+        })(${clickX}, ${clickY})`);
         return { element: clickResult };
       case "clickByText":
         if (!params.text) throw new Error("Text is required for clickByText");
-        const textResult = await page.evaluate((text) => {
-          // Search for all interactive elements
-          const elements = Array.from(document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'));
-          const target = elements.find(el => 
-            el.textContent?.trim().toLowerCase().includes(text.toLowerCase())
-          );
-          if (target instanceof HTMLElement) {
+        const textResult = await page.evaluate(`(function(text) {
+          var els = Array.from(document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'));
+          var target = els.find(function(el) { return (el.textContent||'').trim().toLowerCase().includes(text.toLowerCase()); });
+          if (target) {
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
             target.focus();
             target.click();
-            const rect = target.getBoundingClientRect();
-            return {
-              success: true,
-              tag: target.tagName.toLowerCase(),
-              id: target.id,
-              x: rect.x + rect.width / 2,
-              y: rect.y + rect.height / 2
-            };
+            var rect = target.getBoundingClientRect();
+            return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
           }
           return { success: false };
-        }, params.text);
+        })(${JSON.stringify(params.text)})`);
         return textResult;
       case "clickBySelector":
         if (!params.selector) throw new Error("Selector is required for clickBySelector");
@@ -664,32 +628,24 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.waitForTimeout(200);
         
         // JS Fallback for focus
-        await page.evaluate(({ x, y }) => {
-          const getInteractiveElement = (x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return null;
-            const input = el.closest('input, textarea, [contenteditable="true"]');
-            if (input instanceof HTMLElement) return input;
-            
-            const radius = 10;
-            for (let dx = -radius; dx <= radius; dx += 2) {
-              for (let dy = -radius; dy <= radius; dy += 2) {
-                const nearEl = document.elementFromPoint(x + dx, y + dy);
-                const nearInput = nearEl?.closest('input, textarea, [contenteditable="true"]');
-                if (nearInput instanceof HTMLElement) return nearInput;
+        await page.evaluate(`(function(x, y) {
+          var sel = 'input, textarea, [contenteditable="true"]';
+          var el = document.elementFromPoint(x, y);
+          if (!el) return;
+          var target = el.closest(sel);
+          if (!target) {
+            for (var dx = -10; dx <= 10; dx += 2) {
+              for (var dy = -10; dy <= 10; dy += 2) {
+                var near = document.elementFromPoint(x+dx, y+dy);
+                if (near) { target = near.closest(sel); if (target) break; }
               }
-            }
-            return el instanceof HTMLElement ? el : null;
-          };
-
-          const target = getInteractiveElement(x, y);
-          if (target) {
-            target.focus();
-            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-              target.select();
+              if (target) break;
             }
           }
-        }, { x: typeAtX, y: typeAtY });
+          if (!target) target = el;
+          if (target) { target.focus(); if (target.tagName==='INPUT'||target.tagName==='TEXTAREA') target.select(); }
+        })(${typeAtX}, ${typeAtY})`);
+
 
         if (params.clear) {
           await page.keyboard.press('Backspace');
@@ -701,24 +657,17 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "type":
         if (params.index !== undefined) {
-          const targetInfo = await page.evaluate((index) => {
-            const target = document.querySelector(`[data-agent-index="${index}"]`);
-            if (target instanceof HTMLElement) {
+          const targetInfo = await page.evaluate(`(function(index) {
+            var target = document.querySelector('[data-agent-index="' + index + '"]');
+            if (target) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
               target.focus();
-              if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-                target.select();
-              }
-              const rect = target.getBoundingClientRect();
-              return {
-                success: true,
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2
-              };
+              if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') target.select();
+              var rect = target.getBoundingClientRect();
+              return { success: true, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
             }
             return { success: false };
-          }, params.index);
-          
+          })(${JSON.stringify(params.index)})`);
           if (targetInfo.success) {
             if (params.clear) {
               await page.keyboard.down('Control');
@@ -766,32 +715,24 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.waitForTimeout(200);
         
         // JS Fallback for focus
-        await page.evaluate(({ x, y }) => {
-          const getInteractiveElement = (x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return null;
-            const input = el.closest('input, textarea, [contenteditable="true"]');
-            if (input instanceof HTMLElement) return input;
-            
-            const radius = 10;
-            for (let dx = -radius; dx <= radius; dx += 2) {
-              for (let dy = -radius; dy <= radius; dy += 2) {
-                const nearEl = document.elementFromPoint(x + dx, y + dy);
-                const nearInput = nearEl?.closest('input, textarea, [contenteditable="true"]');
-                if (nearInput instanceof HTMLElement) return nearInput;
+        await page.evaluate(`(function(x, y) {
+          var sel = 'input, textarea, [contenteditable="true"]';
+          var el = document.elementFromPoint(x, y);
+          if (!el) return;
+          var target = el.closest(sel);
+          if (!target) {
+            for (var dx = -10; dx <= 10; dx += 2) {
+              for (var dy = -10; dy <= 10; dy += 2) {
+                var near = document.elementFromPoint(x+dx, y+dy);
+                if (near) { target = near.closest(sel); if (target) break; }
               }
-            }
-            return el instanceof HTMLElement ? el : null;
-          };
-
-          const target = getInteractiveElement(x, y);
-          if (target) {
-            target.focus();
-            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-              target.select();
+              if (target) break;
             }
           }
-        }, { x: typeX, y: typeY });
+          if (!target) target = el;
+          if (target) { target.focus(); if (target.tagName==='INPUT'||target.tagName==='TEXTAREA') target.select(); }
+        })(${typeX}, ${typeY})`);
+
         await page.waitForTimeout(200);
         
         // Clear field if requested
@@ -809,18 +750,28 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "typeBySelector":
         if (!params.selector) throw new Error("selector required for typeBySelector");
-        const tbsEl = await page.locator(params.selector).first();
-        await tbsEl.scrollIntoViewIfNeeded();
-        await tbsEl.click({ force: true });
-        await page.waitForTimeout(150);
-        if (params.clear !== false) {
-          await page.keyboard.down('Control');
-          await page.keyboard.press('a');
-          await page.keyboard.up('Control');
-          await page.keyboard.press('Backspace');
+        let tbsTyped = false;
+        const tbsFrames: any[] = [page, ...page.frames()];
+        for (const tbsFrame of tbsFrames) {
+          try {
+            const tbsEl = tbsFrame.locator(params.selector).first();
+            await tbsEl.waitFor({ state: 'attached', timeout: 3000 });
+            await tbsEl.scrollIntoViewIfNeeded({ timeout: 3000 });
+            await tbsEl.click({ force: true, timeout: 3000 });
+            await page.waitForTimeout(150);
+            if (params.clear !== false) {
+              await page.keyboard.down('Control');
+              await page.keyboard.press('a');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+            }
+            await page.keyboard.type(params.text || "", { delay: 40 });
+            if (params.pressEnter) await page.keyboard.press('Enter');
+            tbsTyped = true;
+            break;
+          } catch (_) { /* try next frame */ }
         }
-        await page.keyboard.type(params.text || "", { delay: 40 });
-        if (params.pressEnter) await page.keyboard.press('Enter');
+        if (!tbsTyped) throw new Error(`typeBySelector: element not found with selector "${params.selector}"`);
         return { success: true, selector: params.selector };
       case "fill":
         if (params.selector) {
@@ -890,21 +841,16 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "hover":
         if (params.index !== undefined) {
-          const hoverResult = await page.evaluate((index) => {
-            const target = document.querySelector(`[data-agent-index="${index}"]`);
-            if (target instanceof HTMLElement) {
+          const hoverResult = await page.evaluate(`(function(index) {
+            var target = document.querySelector('[data-agent-index="' + index + '"]');
+            if (target) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              const rect = target.getBoundingClientRect();
-              return {
-                success: true,
-                tag: target.tagName.toLowerCase(),
-                id: target.id,
-                x: rect.x + rect.width / 2,
-                y: rect.y + rect.height / 2
-              };
+              var rect = target.getBoundingClientRect();
+              return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
             }
             return { success: false };
-          }, params.index);
+          })(${JSON.stringify(params.index)})`);
+
           if (hoverResult.success) {
             await page.mouse.move(hoverResult.x, hoverResult.y);
           }
@@ -922,10 +868,10 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "getHtml":
         const selector = params.selector || 'body';
-        const html = await page.evaluate((sel) => {
-          const el = document.querySelector(sel);
+        const html = await page.evaluate(`(function(sel) {
+          var el = document.querySelector(sel);
           return el ? el.outerHTML.slice(0, 10000) : "Element not found";
-        }, selector);
+        })(${JSON.stringify(selector)})`);
         return { html };
       case "screenshot":
         // Manual screenshot request - just break and it will capture state after
