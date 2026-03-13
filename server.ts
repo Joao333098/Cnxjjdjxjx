@@ -99,8 +99,9 @@ async function startServer() {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
-        host: '0.0.0.0',
-        allowedHosts: true,
+        // Attach HMR WebSocket to the existing HTTP server (port 5000)
+        // so Replit's proxy doesn't need to expose a separate port (24678)
+        hmr: { server },
       },
       watch: {
         ignored: (filePath: string) =>
