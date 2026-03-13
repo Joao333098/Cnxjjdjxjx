@@ -712,6 +712,90 @@ async function executeAction(page: Page, action: string, params: any) {
         }
 
         if (params.pressEnter) await page.keyboard.press('Enter');
+
+        // Verify the text actually landed in some input field across all frames
+        await page.waitForTimeout(200);
+        const typedText = (params.text || '').trim();
+        let verifiedValue = '';
+        if (typedText.length > 0) {
+          for (const f of [page, ...page.frames()]) {
+            try {
+              const snippet = typedText.substring(0, Math.min(4, typedText.length));
+              const val = await f.evaluate((snip: string) => {
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea'));
+                const match = inputs.find((el: any) => el.value && el.value.includes(snip));
+                return match ? (match as any).value : '';
+              }, snippet);
+              if (val) { verifiedValue = val; break; }
+            } catch (_) {}
+          }
+        }
+        result = { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
+        break;
+      }
+      case "forceTypeAt": {
+        // Force-type by directly injecting value via JavaScript (bypasses focus/iframe issues)
+        if (typeof params.x !== 'number' || typeof params.y !== 'number') {
+          throw new Error("Invalid coordinates for forceTypeAt");
+        }
+        const ftX = params.x, ftY = params.y;
+        const ftText = params.text || '';
+        let ftDone = false;
+
+        for (const frame of [page, ...page.frames()]) {
+          try {
+            let fX = ftX, fY = ftY;
+            if (frame !== (page as any)) {
+              const frameEl = await (frame as any).frameElement();
+              if (!frameEl) continue;
+              const box = await frameEl.boundingBox();
+              if (!box) continue;
+              fX = ftX - box.x; fY = ftY - box.y;
+              if (fX < 0 || fY < 0 || fX > box.width || fY > box.height) continue;
+            }
+            const success = await frame.evaluate(([x, y, text]: [number, number, string]) => {
+              const el = document.elementFromPoint(x, y) as HTMLElement | null;
+              if (!el) return false;
+              const target = (el.closest('input:not([type="hidden"]), textarea, [contenteditable="true"]') || el) as HTMLInputElement;
+              if (!target) return false;
+              const tag = target.tagName;
+              if (!['INPUT', 'TEXTAREA'].includes(tag) && target.contentEditable !== 'true') return false;
+              target.focus();
+              target.click();
+              // Use native value setter to bypass React controlled inputs
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              if (nativeSetter) {
+                nativeSetter.call(target, text);
+              } else {
+                (target as HTMLInputElement).value = text;
+              }
+              target.dispatchEvent(new Event('input', { bubbles: true }));
+              target.dispatchEvent(new Event('change', { bubbles: true }));
+              target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: text.slice(-1) }));
+              return true;
+            }, [fX, fY, ftText] as [number, number, string]);
+            if (success) { ftDone = true; break; }
+          } catch (_) {}
+        }
+
+        // Verify it landed
+        let ftVerified = false;
+        if (ftDone && ftText.length > 0) {
+          await page.waitForTimeout(150);
+          const snip = ftText.substring(0, Math.min(4, ftText.length));
+          for (const f of [page, ...page.frames()]) {
+            try {
+              const val = await f.evaluate((s: string) => {
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea'));
+                const match = inputs.find((el: any) => el.value && el.value.includes(s));
+                return match ? (match as any).value : '';
+              }, snip);
+              if (val) { ftVerified = true; break; }
+            } catch (_) {}
+          }
+        }
+        result = { success: ftDone, verified: ftVerified };
         break;
       }
       case "type":
