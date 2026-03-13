@@ -16,6 +16,9 @@ COPY . .
 # Constrói o frontend (Vite)
 RUN npm run build
 
+# Define que o ambiente é de produção
+ENV NODE_ENV=production
+
 # Expõe a porta que o Express vai rodar
 EXPOSE 3000
 

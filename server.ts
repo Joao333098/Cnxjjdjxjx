@@ -23,7 +23,7 @@ const io = new Server(server, {
   },
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
@@ -331,13 +331,13 @@ async function capturePageState(page: Page) {
     const screenshot = await page.screenshot({ type: "jpeg", quality: 50, timeout: 5000 });
     base64Screenshot = screenshot.toString("base64");
   } catch (error) {
-    console.error("Failed to capture screenshot, retrying...", error);
+    console.error("Failed to capture screenshot, retrying...", error instanceof Error ? error.message : error);
     try {
       await page.waitForTimeout(1000);
       const screenshot = await page.screenshot({ type: "jpeg", quality: 50, timeout: 5000 });
       base64Screenshot = screenshot.toString("base64");
     } catch (retryError) {
-      console.error("Retry failed to capture screenshot:", retryError);
+      console.error("Retry failed to capture screenshot:", retryError instanceof Error ? retryError.message : retryError);
     }
   }
 
@@ -491,7 +491,7 @@ async function executeAction(page: Page, action: string, params: any) {
         
         return clickAtResult;
       case "click":
-        if (params.index) {
+        if (params.index !== undefined) {
           const indexResult = await page.evaluate((index) => {
             const target = document.querySelector(`[data-agent-index="${index}"]`);
             if (target instanceof HTMLElement) {
@@ -674,7 +674,7 @@ async function executeAction(page: Page, action: string, params: any) {
         }
         break;
       case "type":
-        if (params.index) {
+        if (params.index !== undefined) {
           const targetInfo = await page.evaluate((index) => {
             const target = document.querySelector(`[data-agent-index="${index}"]`);
             if (target instanceof HTMLElement) {
@@ -716,6 +716,20 @@ async function executeAction(page: Page, action: string, params: any) {
           return { success: true, selector: params.selector };
         }
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
+          if (params.text !== undefined) {
+            if (params.clear) {
+              await page.keyboard.down('Control');
+              await page.keyboard.press('a');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+            }
+            await page.keyboard.type(params.text || "", { delay: 50 });
+            if (params.pressEnter) {
+              await page.waitForTimeout(300);
+              await page.keyboard.press("Enter");
+            }
+            return { success: true };
+          }
           throw new Error("Invalid coordinates for type");
         }
         const typeX = Math.max(0, params.x);
@@ -834,7 +848,7 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.reload();
         break;
       case "hover":
-        if (params.index) {
+        if (params.index !== undefined) {
           const hoverResult = await page.evaluate((index) => {
             const target = document.querySelector(`[data-agent-index="${index}"]`);
             if (target instanceof HTMLElement) {
@@ -931,6 +945,7 @@ async function executeAction(page: Page, action: string, params: any) {
     }
   } catch (e) {
     console.error(`Action ${action} failed:`, e);
+    throw e;
   }
 }
 
