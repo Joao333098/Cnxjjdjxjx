@@ -207,13 +207,12 @@ export default function App() {
         3. Inspect the attributes of all textboxes (name, aria-label, placeholder).
            - The email field usually has 'email', 'user', or 'login' in its attributes.
            - The CAPTCHA field usually has 'captcha', 'code', 'type the text', or similar in its attributes.
-        4. IF THE FIELD HAS AN INDEX: Click to focus, then type with a delay.
+        4. IF THE FIELD HAS AN INDEX: Use the 'type' tool with that index.
         5. IF THE FIELD HAS NO INDEX (MISSING TAG):
-           - Strategy A (Tab Navigation): Click a nearby element with an index (like an audio icon) to focus the area, then use 'pressKey' with 'Tab' to move to the CAPTCHA input.
-           - Strategy B (CSS Selector): Use 'type' or 'fill' with a specific selector, e.g., 'input[aria-label="Type the text you hear or see"]'.
-        6. Type the text with a delay (use 'type' tool).
-        7. Wait 1-2 seconds after typing.
-        8. Click the 'Next' or 'Próxima' button.
+           - Strategy A (Coordinates): Estimate the X and Y coordinates of the center of the input field based on the screenshot, and use the 'type' tool with those coordinates (e.g., {"action": "type", "params": {"x": 450, "y": 320, "text": "abcd"}}).
+           - Strategy B (Tab Navigation): Click a nearby element with an index to focus the area, then use 'pressKey' with 'Tab' to move to the CAPTCHA input.
+        6. Wait 1-2 seconds after typing.
+        7. Click the 'Next' or 'Próxima' button.
       - If you accidentally fill the wrong field (e.g., email field), use 'type' with 'clear: true' to empty it, then try the correct field again.
       - If the action fails, explain why and try a different approach (e.g., different selector, different wait time).
       
@@ -225,15 +224,17 @@ export default function App() {
       INSTRUCTIONS:
       1. Analyze the provided screenshot, console logs, and accessibility tree.
       2. Choose the BEST tool for the next immediate action.
-      3. PRECISION: Use the 'index' parameter in click/type tools whenever possible. Interactive elements in the accessibility tree have a unique 'index'.
+      3. SUPER FAST CLICKS: ALWAYS use the 'index' parameter in click/type tools whenever possible. This skips mouse movement and clicks instantly. Interactive elements in the accessibility tree have a unique 'index'.
       4. Provide a brief PLAN (next 3-5 steps) to show you are thinking ahead.
       
       TOOLS:
       - navigate(url: string)
-      - click(x: number, y: number, selector?: string, index?: number) // Click by coordinates, selector, or index. PREFER INDEX.
+      - click(index: number) // FASTEST: Click an element by its index from the accessibility tree. ALWAYS PREFER THIS.
+      - clickAt(x: number, y: number) // Click by coordinates ONLY if the element has no index.
       - clickByText(text: string) // BEST for buttons and links with clear text.
       - clickBySelector(selector: string) // BEST for specific elements with ID or unique class.
-      - type(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean, selector?: string, index?: number) // PREFER INDEX.
+      - type(index: number, text: string, clear?: boolean, pressEnter?: boolean) // FASTEST: Type into an element by its index. ALWAYS PREFER THIS.
+      - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean) // Type by coordinates ONLY if no index.
       - fill(selector: string, text: string, index?: number) // Clear and fill an input.
       - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string) // Semantic search.
       - scroll(direction: "up" | "down", amount: number)
@@ -248,6 +249,9 @@ export default function App() {
       - finish(message: string)
       
       RESPONSE FORMAT (JSON ONLY):
+      - DO NOT use comments (//) in the JSON.
+      - DO NOT use unescaped newlines in strings.
+      - Return ONLY a valid JSON object.
       {
         "thought": "Reasoning for this step. If last step failed, explain why. Use the console logs and HTML to debug.",
         "plan": ["step 1", "step 2", "step 3", "step 4", "step 5"],
@@ -257,8 +261,8 @@ export default function App() {
     `;
 
     try {
-      // Add a small delay to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Add a tiny delay to avoid rate limits but keep it fast
+      await new Promise(resolve => setTimeout(resolve, 300));
       
       const response = await fetch('/api/nova', {
         method: 'POST',
@@ -286,7 +290,22 @@ export default function App() {
       const text = data.choices[0].message.content;
       if (!text) throw new Error("Empty response from AI");
       
-      const result = JSON.parse(text);
+      // Clean up markdown formatting if present
+      let cleanedText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+      
+      // Extract just the JSON object if there's text before or after it
+      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanedText = jsonMatch[0];
+      }
+      
+      let result;
+      try {
+        result = JSON.parse(cleanedText);
+      } catch (e) {
+        console.error("Failed to parse JSON:", cleanedText);
+        throw new Error(`JSON Parse error: ${(e as Error).message}`);
+      }
       console.log('AI Decision:', result);
       
       if (result.plan) setCurrentPlan(result.plan);
@@ -316,7 +335,11 @@ export default function App() {
         lastActionRef.current = { action: result.action, params: result.params };
         
         if (result.action === 'click' || result.action === 'type' || result.action === 'hover') {
-          setLastClick({ x: result.params.x, y: result.params.y });
+          if (result.params.x !== undefined && result.params.y !== undefined) {
+            setLastClick({ x: result.params.x, y: result.params.y });
+          } else {
+            setLastClick(null);
+          }
         } else {
           setLastClick(null);
         }

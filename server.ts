@@ -3,10 +3,14 @@ import { createServer as createViteServer } from "vite";
 import { Server } from "socket.io";
 import http from "http";
 import cors from "cors";
-import { chromium, Browser, Page } from "playwright-chromium";
+import { Browser, Page } from "playwright-chromium";
+import { chromium } from "playwright-extra";
+import stealth from "puppeteer-extra-plugin-stealth";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+
+chromium.use(stealth());
 
 dotenv.config();
 
@@ -38,20 +42,34 @@ async function startServer() {
     try {
       const apiKey = process.env.VITE_NOVA_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
+      
+      // Determine the correct endpoint and model based on the key
+      // Amazon does not provide a direct "api.nova.amazon.com" OpenAI-compatible endpoint.
+      // If using OpenRouter to access Nova:
+      const isOpenRouter = apiKey.startsWith('sk-or-');
+      const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
+      const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-pro-v1';
+
       const openai = new OpenAI({
-        baseURL: 'https://api.nova.amazon.com/v1',
-        apiKey
+        baseURL,
+        apiKey,
+        defaultHeaders: {
+          'HTTP-Referer': 'https://localhost:3000',
+          'X-Title': 'AI Browser Agent',
+          'x-api-key': apiKey // Added for custom API Gateways that require it
+        }
       });
+      
       const response = await openai.chat.completions.create({
-        model: "nova-pro-v1",
+        model: modelName,
         messages,
         response_format,
-        max_completion_tokens: 8192
+        max_tokens: 8192
       });
       res.json(response);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Nova API error:", error);
-      res.status(500).json({ error: "Failed to call Nova API" });
+      res.status(500).json({ error: error.message || "Failed to call Nova API" });
     }
   });
 
@@ -73,7 +91,15 @@ async function startServer() {
     socket.on("start-task", async () => {
       try {
         if (!browser) {
-          browser = await chromium.launch({ headless: true });
+          browser = await chromium.launch({ 
+            headless: true,
+            args: [
+              '--disable-blink-features=AutomationControlled',
+              '--disable-features=IsolateOrigins,site-per-process',
+              '--no-sandbox',
+              '--disable-setuid-sandbox'
+            ]
+          });
           browserContext = await browser.newContext({
             viewport: { width: 1280, height: 800 },
             deviceScaleFactor: 1,
@@ -150,12 +176,12 @@ async function startServer() {
           
           // Wait for page to settle
           try {
-            await activePage.waitForLoadState("load", { timeout: 5000 });
-            await activePage.waitForLoadState("networkidle", { timeout: 5000 });
+            await activePage.waitForLoadState("load", { timeout: 3000 });
+            await activePage.waitForLoadState("networkidle", { timeout: 3000 });
           } catch (e) {
             // Ignore timeout errors during wait
           }
-          await activePage.waitForTimeout(1000);
+          await activePage.waitForTimeout(200);
           
           // Send back new state
           const state = await capturePageState(activePage);
@@ -289,12 +315,37 @@ async function startServer() {
 }
 
 async function capturePageState(page: Page) {
-  const screenshot = await page.screenshot({ type: "jpeg", quality: 50 });
-  const base64Screenshot = screenshot.toString("base64");
-  const url = page.url();
-  const title = await page.title();
+  if (page.isClosed()) {
+    return { screenshot: "", url: "", title: "Page Closed", accessibilityTree: [] };
+  }
 
-  const accessibilityTree = await page.evaluate(`(() => {
+  let base64Screenshot = "";
+  try {
+    const screenshot = await page.screenshot({ type: "jpeg", quality: 50, timeout: 5000 });
+    base64Screenshot = screenshot.toString("base64");
+  } catch (error) {
+    console.error("Failed to capture screenshot, retrying...", error);
+    try {
+      await page.waitForTimeout(1000);
+      const screenshot = await page.screenshot({ type: "jpeg", quality: 50, timeout: 5000 });
+      base64Screenshot = screenshot.toString("base64");
+    } catch (retryError) {
+      console.error("Retry failed to capture screenshot:", retryError);
+    }
+  }
+
+  let url = "";
+  let title = "";
+  try {
+    url = page.url();
+    title = await page.title();
+  } catch (e) {
+    console.error("Failed to get url/title:", e);
+  }
+
+  let accessibilityTree = [];
+  try {
+    accessibilityTree = await page.evaluate(`(() => {
     const isInteractive = (node) => {
       const tag = node.tagName.toLowerCase();
       const role = node.getAttribute("role");
@@ -360,6 +411,9 @@ async function capturePageState(page: Page) {
     };
     return walk(document.body);
   })()`);
+  } catch (e) {
+    console.error("Failed to evaluate accessibility tree:", e);
+  }
 
   return {
     screenshot: base64Screenshot,
@@ -374,18 +428,61 @@ async function capturePageState(page: Page) {
 async function executeAction(page: Page, action: string, params: any) {
   console.log(`Executing ${action} with params:`, params);
   
-  // Ensure viewport is consistent with the agent's view (Desktop size)
-  await page.setViewportSize({ width: 1280, height: 800 });
-  
   try {
+    // Ensure viewport is consistent with the agent's view (Desktop size)
+    await page.setViewportSize({ width: 1280, height: 800 });
+    
     switch (action) {
       case "navigate":
         let url = params.url;
         if (!url) throw new Error("URL is required for navigate action");
         if (!url.startsWith('http')) url = 'https://' + url;
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForTimeout(2000); // Extra settling time
+        await page.waitForTimeout(500); // Extra settling time
         break;
+      case "clickAt":
+        if (typeof params.x !== 'number' || typeof params.y !== 'number') {
+          throw new Error("Invalid coordinates for clickAt");
+        }
+        const clickAtX = Math.max(0, params.x);
+        const clickAtY = Math.max(0, params.y);
+        
+        // Move mouse first to trigger hover effects
+        await page.mouse.move(clickAtX, clickAtY);
+        await page.waitForTimeout(100);
+        
+        // Perform the actual click
+        await page.mouse.click(clickAtX, clickAtY);
+        
+        // JS Fallback
+        await page.waitForTimeout(100);
+        const clickAtResult = await page.evaluate(({ x, y }) => {
+          const getInteractiveElement = (x, y) => {
+            const el = document.elementFromPoint(x, y);
+            if (!el) return null;
+            const interactive = el.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
+            if (interactive instanceof HTMLElement) return interactive;
+            const radius = 5;
+            for (let dx = -radius; dx <= radius; dx += 2) {
+              for (let dy = -radius; dy <= radius; dy += 2) {
+                const nearEl = document.elementFromPoint(x + dx, y + dy);
+                const nearInteractive = nearEl?.closest('input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]');
+                if (nearInteractive instanceof HTMLElement) return nearInteractive;
+              }
+            }
+            return el instanceof HTMLElement ? el : null;
+          };
+
+          const target = getInteractiveElement(x, y);
+          if (target) {
+            target.focus();
+            target.click();
+            return { success: true, tag: target.tagName.toLowerCase(), id: target.id };
+          }
+          return { success: false, reason: 'no interactive element found at coordinates' };
+        }, { x: clickAtX, y: clickAtY });
+        
+        return clickAtResult;
       case "click":
         if (params.index) {
           const indexResult = await page.evaluate((index) => {
@@ -522,33 +619,88 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.mouse.move(params.x, params.y);
         await page.mouse.click(params.x, params.y, { button: 'right' });
         break;
+      case "typeAt":
+        if (typeof params.x !== 'number' || typeof params.y !== 'number') {
+          throw new Error("Invalid coordinates for typeAt");
+        }
+        const typeAtX = Math.max(0, params.x);
+        const typeAtY = Math.max(0, params.y);
+
+        // Click to focus first
+        await page.mouse.click(typeAtX, typeAtY);
+        await page.waitForTimeout(200);
+        
+        // JS Fallback for focus
+        await page.evaluate(({ x, y }) => {
+          const getInteractiveElement = (x, y) => {
+            const el = document.elementFromPoint(x, y);
+            if (!el) return null;
+            const input = el.closest('input, textarea, [contenteditable="true"]');
+            if (input instanceof HTMLElement) return input;
+            
+            const radius = 10;
+            for (let dx = -radius; dx <= radius; dx += 2) {
+              for (let dy = -radius; dy <= radius; dy += 2) {
+                const nearEl = document.elementFromPoint(x + dx, y + dy);
+                const nearInput = nearEl?.closest('input, textarea, [contenteditable="true"]');
+                if (nearInput instanceof HTMLElement) return nearInput;
+              }
+            }
+            return el instanceof HTMLElement ? el : null;
+          };
+
+          const target = getInteractiveElement(x, y);
+          if (target) {
+            target.focus();
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+              target.select();
+            }
+          }
+        }, { x: typeAtX, y: typeAtY });
+
+        if (params.clear) {
+          await page.keyboard.press('Backspace');
+        }
+        await page.keyboard.type(params.text, { delay: 30 });
+        if (params.pressEnter) {
+          await page.keyboard.press('Enter');
+        }
+        break;
       case "type":
         if (params.index) {
-          const typeResult = await page.evaluate(`(function(index, text, clear, pressEnter) {
-            const target = document.querySelector('[data-agent-index="' + index + '"]');
+          const targetInfo = await page.evaluate((index) => {
+            const target = document.querySelector(`[data-agent-index="${index}"]`);
             if (target instanceof HTMLElement) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
               target.focus();
               if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-                if (clear) target.value = "";
-                target.value += text;
-                if (pressEnter) {
-                  const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                  target.dispatchEvent(event);
-                }
+                target.select();
               }
               const rect = target.getBoundingClientRect();
               return {
                 success: true,
-                tag: target.tagName.toLowerCase(),
-                id: target.id,
                 x: rect.x + rect.width / 2,
                 y: rect.y + rect.height / 2
               };
             }
             return { success: false };
-          })(${params.index}, ${JSON.stringify(params.text)}, ${params.clear}, ${params.pressEnter})`);
-          return typeResult;
+          }, params.index);
+          
+          if (targetInfo.success) {
+            if (params.clear) {
+              await page.keyboard.down('Control');
+              await page.keyboard.press('a');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+            }
+            await page.keyboard.type(params.text || "", { delay: 50 });
+            if (params.pressEnter) {
+              await page.waitForTimeout(300);
+              await page.keyboard.press("Enter");
+            }
+            return targetInfo;
+          }
+          return { success: false, reason: 'Index not found' };
         }
         if (params.selector) {
           if (params.clear) await page.fill(params.selector, "");
@@ -660,7 +812,7 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.mouse.up();
         break;
       case "wait":
-        await page.waitForTimeout(params.ms || 2000);
+        await page.waitForTimeout(params.ms || 500);
         break;
       case "waitForSelector":
         await page.waitForSelector(params.selector, { timeout: 5000 });
