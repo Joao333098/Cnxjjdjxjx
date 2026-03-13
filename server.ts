@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import { Server } from "socket.io";
 import http from "http";
 import cors from "cors";
+import path from "path";
 import { Browser, Page } from "playwright-chromium";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
@@ -22,7 +23,7 @@ const io = new Server(server, {
   },
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
@@ -80,6 +81,12 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
   }
 
   // Socket.io logic
