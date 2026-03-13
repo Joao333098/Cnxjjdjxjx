@@ -64,9 +64,10 @@ export default function App() {
   const [waitingForUserInput, setWaitingForUserInput] = useState(false);
   const [captchaPendingCoords, setCaptchaPendingCoords] = useState<{x: number, y: number} | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState('');
-  const [pageHints, setPageHints] = useState('');
+  const [pinnedElements, setPinnedElements] = useState<{index: number, label: string}[]>([]);
   const [showHintsPanel, setShowHintsPanel] = useState(false);
-  const [hintsInput, setHintsInput] = useState('');
+  const [pinIndexInput, setPinIndexInput] = useState('');
+  const [pinLabelInput, setPinLabelInput] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
@@ -198,11 +199,14 @@ export default function App() {
       CURRENT STEP: ${stepCountRef.current}
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
 
-      ${pageHints ? `
-      ===== PAGE HINTS FROM USER (FOLLOW THESE EXACTLY) =====
-      The user has provided specific instructions for this page/site:
-      ${pageHints}
-      These instructions override default behavior. Follow them precisely.
+      ${pinnedElements.length > 0 ? `
+      ===== ELEMENT PINS (USER-SPECIFIED TARGETS — USE THESE) =====
+      The user has pinned specific element indexes for you to use:
+      ${pinnedElements.map(p => `• Element #${p.index} → ${p.label}`).join('\n      ')}
+      
+      When performing any action related to these labels, ALWAYS use the pinned element index.
+      Example: if "CAPTCHA input" is pinned as #7, use type(index=7, text=...) to type in it.
+      These override any guessing — use click(index=N) or type(index=N) for pinned elements.
       =====
       ` : ''}
       
@@ -683,13 +687,13 @@ export default function App() {
               </button>
             </div>
             <button
-              onClick={() => { setHintsInput(pageHints); setShowHintsPanel(!showHintsPanel); }}
-              title="Page Hints for AI"
-              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors border text-[10px] font-bold uppercase tracking-widest ${pageHints ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'hover:bg-white/10 border-white/10 text-zinc-500'}`}
+              onClick={() => setShowHintsPanel(!showHintsPanel)}
+              title="Element Pins for AI"
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors border text-[10px] font-bold uppercase tracking-widest ${pinnedElements.length > 0 ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'hover:bg-white/10 border-white/10 text-zinc-500'}`}
             >
               <Lightbulb className="w-3.5 h-3.5" />
               <span className="hidden md:inline">Hints</span>
-              {pageHints && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />}
+              {pinnedElements.length > 0 && <span className="w-4 h-4 rounded-full bg-yellow-400 text-black text-[9px] font-black flex items-center justify-center">{pinnedElements.length}</span>}
             </button>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-zinc-500 uppercase font-bold">Scale</span>
@@ -754,58 +758,92 @@ export default function App() {
             </button>
           </div>
 
-          {/* Page Hints Panel */}
+          {/* Element Pins Panel */}
           <AnimatePresence>
             {showHintsPanel && (
               <motion.div
                 initial={{ y: -20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: -20, opacity: 0 }}
-                className="absolute top-4 left-4 right-4 z-50 max-w-lg mx-auto"
+                className="absolute top-4 left-4 right-4 z-50 max-w-md mx-auto"
               >
-                <div className="bg-black/90 backdrop-blur-xl border border-yellow-500/30 rounded-2xl p-4 shadow-[0_0_40px_rgba(234,179,8,0.1)]">
+                <div className="bg-black/95 backdrop-blur-xl border border-yellow-500/30 rounded-2xl p-4 shadow-[0_0_40px_rgba(234,179,8,0.1)]">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 rounded-lg bg-yellow-500/20 flex items-center justify-center">
                         <Lightbulb className="w-4 h-4 text-yellow-400" />
                       </div>
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Dicas para a IA</p>
-                        <p className="text-[10px] text-zinc-500">Instruções específicas para essa página/site</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Elementos Fixos</p>
+                        <p className="text-[10px] text-zinc-500">A IA vai usar esses índices diretamente</p>
                       </div>
                     </div>
                     <button onClick={() => setShowHintsPanel(false)} className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-500">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <textarea
-                    value={hintsInput}
-                    onChange={(e) => setHintsInput(e.target.value)}
-                    placeholder={"Ex: Nesse site o campo de CAPTCHA fica abaixo da imagem. Após preencher, clique em 'Verificar'. O login tem 2 etapas: email e depois senha."}
-                    rows={4}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-[11px] text-white font-mono outline-none focus:border-yellow-500/50 resize-none mb-3 leading-relaxed placeholder:text-zinc-600"
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => { setPageHints(hintsInput); setShowHintsPanel(false); }}
-                      className="flex-1 py-2 bg-yellow-500 text-black text-[11px] font-black uppercase tracking-widest rounded-xl hover:bg-yellow-400 transition-colors"
-                    >
-                      Salvar Dicas
-                    </button>
-                    {pageHints && (
-                      <button
-                        onClick={() => { setPageHints(''); setHintsInput(''); setShowHintsPanel(false); }}
-                        className="py-2 px-3 bg-red-500/20 text-red-400 text-[11px] font-bold uppercase rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20"
-                      >
-                        Limpar
-                      </button>
-                    )}
-                  </div>
-                  {pageHints && (
-                    <div className="mt-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
-                      <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest mb-1">Dicas ativas:</p>
-                      <p className="text-[10px] text-zinc-400 line-clamp-2">{pageHints}</p>
+
+                  {/* Existing pins list */}
+                  {pinnedElements.length > 0 && (
+                    <div className="space-y-1.5 mb-3">
+                      {pinnedElements.map((pin, i) => (
+                        <div key={i} className="flex items-center gap-2 bg-yellow-500/5 border border-yellow-500/20 rounded-xl px-3 py-2">
+                          <div className="w-6 h-6 rounded-lg bg-yellow-500 text-black text-[10px] font-black flex items-center justify-center flex-shrink-0">
+                            {pin.index}
+                          </div>
+                          <span className="flex-1 text-[11px] text-zinc-300">{pin.label}</span>
+                          <button
+                            onClick={() => setPinnedElements(prev => prev.filter((_, j) => j !== i))}
+                            className="p-1 hover:bg-red-500/20 text-zinc-600 hover:text-red-400 rounded-lg transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
+                  )}
+
+                  {/* Add new pin form */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={pinIndexInput}
+                      onChange={(e) => setPinIndexInput(e.target.value)}
+                      placeholder="#"
+                      min="1"
+                      className="w-14 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-[12px] text-white font-mono outline-none focus:border-yellow-500/50 text-center"
+                    />
+                    <input
+                      type="text"
+                      value={pinLabelInput}
+                      onChange={(e) => setPinLabelInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && pinIndexInput && pinLabelInput.trim()) {
+                          setPinnedElements(prev => [...prev, { index: parseInt(pinIndexInput), label: pinLabelInput.trim() }]);
+                          setPinIndexInput('');
+                          setPinLabelInput('');
+                        }
+                      }}
+                      placeholder="Ex: Campo CAPTCHA, Botão Entrar..."
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] text-white outline-none focus:border-yellow-500/50"
+                    />
+                    <button
+                      onClick={() => {
+                        if (!pinIndexInput || !pinLabelInput.trim()) return;
+                        setPinnedElements(prev => [...prev, { index: parseInt(pinIndexInput), label: pinLabelInput.trim() }]);
+                        setPinIndexInput('');
+                        setPinLabelInput('');
+                      }}
+                      className="w-8 h-8 bg-yellow-500 text-black rounded-xl font-black text-lg flex items-center justify-center hover:bg-yellow-400 transition-colors flex-shrink-0"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {pinnedElements.length === 0 && (
+                    <p className="text-[10px] text-zinc-600 mt-2 text-center">
+                      Ative Elements, veja o número do elemento no site e adicione aqui
+                    </p>
                   )}
                 </div>
               </motion.div>

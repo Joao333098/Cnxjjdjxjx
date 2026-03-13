@@ -853,42 +853,62 @@ async function executeAction(page: Page, action: string, params: any) {
         return { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
       }
       case "captchaType": {
-        // Smart CAPTCHA typer: finds any visible text input across all frames using Playwright native
-        // API (which works for cross-origin iframes unlike JS injection).
+        // Smart CAPTCHA typer: finds the correct empty visible text input across all frames.
+        // Prefers EMPTY inputs (CAPTCHA fields are always empty before user types).
         const ctText = params.text || '';
         if (!ctText) return { success: false, reason: 'no text provided' };
 
         let ctDone = false;
 
-        const inputSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="image"]), textarea';
+        const inputSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="image"]):not([type="email"]):not([type="password"]), textarea';
 
-        // Strategy A: Use Playwright native frame.locator() to find input in any frame
-        // This works even for cross-origin iframes (uses CDP, not JS injection)
+        // Helper: click at abs coords, wait for focus, then type
+        const clickAndType = async (absX: number, absY: number) => {
+          await page.mouse.move(absX, absY);
+          await page.waitForTimeout(80);
+          await page.mouse.click(absX, absY);
+          await page.waitForTimeout(400); // longer delay — cross-origin iframes need time to accept focus
+          await page.keyboard.press('Control+a');
+          await page.waitForTimeout(50);
+          await page.keyboard.press('Delete');
+          await page.waitForTimeout(50);
+          await page.keyboard.type(ctText, { delay: 60 });
+          // Second click to ensure focus wasn't stolen
+          await page.waitForTimeout(100);
+        };
+
+        // Strategy A: Use Playwright native frame.locator() - prefers EMPTY inputs
         const allFrames = [page.mainFrame(), ...page.frames()];
         for (const frame of allFrames) {
           try {
-            const loc = frame.locator(inputSelector).first();
-            const box = await loc.boundingBox({ timeout: 1500 });
-            if (!box) continue;
+            // Get all matching inputs in this frame
+            const locs = frame.locator(inputSelector);
+            const count = await locs.count().catch(() => 0);
+            let bestBox: any = null;
 
-            // Convert frame-relative coords to page-level coords
-            let absX = box.x + box.width / 2;
-            let absY = box.y + box.height / 2;
+            for (let i = 0; i < count; i++) {
+              try {
+                const loc = locs.nth(i);
+                const box = await loc.boundingBox({ timeout: 800 });
+                if (!box || box.width < 10 || box.height < 6) continue;
+                // Prefer empty inputs — check value via evaluate
+                const isEmpty = await loc.evaluate((el: any) => !el.value || el.value.trim() === '').catch(() => true);
+                if (isEmpty) { bestBox = box; break; }
+                if (!bestBox) bestBox = box; // fallback: first visible
+              } catch (_) {}
+            }
+
+            if (!bestBox) continue;
+
+            let absX = bestBox.x + bestBox.width / 2;
+            let absY = bestBox.y + bestBox.height / 2;
             if (frame !== page.mainFrame()) {
-              const frameEl = await frame.frameElement();
-              const frameBox = await frameEl.boundingBox();
+              const frameEl = await (frame as any).frameElement();
+              const frameBox = await frameEl?.boundingBox();
               if (frameBox) { absX += frameBox.x; absY += frameBox.y; }
             }
 
-            // Native mouse click to focus the element in the browser
-            await page.mouse.click(absX, absY);
-            await page.waitForTimeout(200);
-            // Clear any existing text, then type
-            await page.keyboard.press('Control+a');
-            await page.waitForTimeout(40);
-            await page.keyboard.press('Delete');
-            await page.waitForTimeout(40);
-            await page.keyboard.type(ctText, { delay: 50 });
+            await clickAndType(absX, absY);
             ctDone = true;
             break;
           } catch (_) {}
