@@ -55,18 +55,29 @@ async function startServer() {
 
       const isOpenRouter = apiKey.startsWith('sk-or-');
       const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
-      const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-pro-v1';
+      // nova-2-lite-v1 supports multimodal (images) and has better rate limits (20 RPM)
+      const modelName = isOpenRouter ? 'amazon/nova-lite-v1' : 'nova-2-lite-v1';
 
-      const openai = new OpenAI({ baseURL, apiKey });
-
-      const response = await openai.chat.completions.create({
-        model: modelName,
-        messages,
-        max_tokens: 8192,
+      // Make raw fetch so we can inspect the actual response body on errors
+      const rawResponse = await fetch(`${baseURL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model: modelName, messages, max_tokens: 8192 }),
       });
-      res.json(response);
+
+      if (!rawResponse.ok) {
+        const errorText = await rawResponse.text().catch(() => "(unreadable body)");
+        console.error(`Nova API ${rawResponse.status} error body:`, errorText);
+        throw new Error(`Nova API ${rawResponse.status}: ${errorText || rawResponse.statusText}`);
+      }
+
+      const data = await rawResponse.json();
+      res.json(data);
     } catch (error: any) {
-      console.error("Nova API error:", error);
+      console.error("Nova API error:", error.message);
       res.status(500).json({ error: error.message || "Failed to call Nova API" });
     }
   });
