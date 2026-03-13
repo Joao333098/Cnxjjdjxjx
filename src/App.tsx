@@ -70,6 +70,7 @@ export default function App() {
   const userPromptRef = useRef('');
   const stepCountRef = useRef(0);
   const lastActionRef = useRef<any>(null);
+  const postCaptchaRef = useRef<string | null>(null);
   const watchdogRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -183,12 +184,24 @@ export default function App() {
     setStepCount(stepCountRef.current);
     setStatus(`Thinking (Step ${stepCountRef.current})...`);
     
+    const captchaJustTyped = postCaptchaRef.current;
+    postCaptchaRef.current = null;
+
     const systemPrompt = `
       You are an elite autonomous browser agent. Your goal: "${userPromptRef.current}"
       
       CURRENT STEP: ${stepCountRef.current}
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
       
+      ${captchaJustTyped ? `
+      ⚠️ CAPTCHA JUST TYPED — CRITICAL OVERRIDE ⚠️
+      The human ALREADY typed the CAPTCHA answer: "${captchaJustTyped}"
+      The text is NOW in the CAPTCHA field on the page.
+      DO NOT call waitForUser again. DO NOT re-verify the CAPTCHA field.
+      Your ONLY job right now: click the "Next" or "Submit" button to submit the form.
+      Skip ALL other verification steps and go straight to clicking Next/Submit.
+      ` : ''}
+
       CONSOLE LOGS (Last 10):
       ${consoleLogs.slice(-10).map(l => `[${l.type}] ${l.text}`).join('\n')}
 
@@ -432,6 +445,9 @@ export default function App() {
       setWaitingForUserInput(false);
       setCaptchaMessage('');
 
+      // Mark that CAPTCHA was just typed so next agent step knows to click Next immediately
+      postCaptchaRef.current = captchaText;
+
       if (captchaPendingCoords) {
         const coords = captchaPendingCoords;
         setCaptchaPendingCoords(null);
@@ -442,9 +458,9 @@ export default function App() {
         });
         // Agent loop resumes on action-completed
       } else {
-        // No coords — just inject the text as context and continue
+        // No coords — just continue with context
         setCaptchaPendingCoords(null);
-        lastActionRef.current = { action: 'waitForUser-reply', params: { text: captchaText } };
+        lastActionRef.current = { action: 'captcha-typed', params: { text: captchaText } };
         setTimeout(runAgentStep, 500);
       }
       return;
