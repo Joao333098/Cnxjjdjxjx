@@ -339,8 +339,21 @@ async function startServer() {
     });
   });
 
+  // Kill any existing processes on this port and the Vite HMR port before binding
+  try { execSync(`fuser -k ${PORT}/tcp 24678/tcp 2>/dev/null || true`); } catch (_) {}
+  await new Promise(r => setTimeout(r, 500));
+
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  server.on('error', async (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`Port ${PORT} still in use, retrying...`);
+      try { execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`); } catch (_) {}
+      await new Promise(r => setTimeout(r, 800));
+      server.listen(PORT, "0.0.0.0");
+    }
   });
 }
 
@@ -641,34 +654,21 @@ async function executeAction(page: Page, action: string, params: any) {
         const typeAtX = Math.max(0, params.x);
         const typeAtY = Math.max(0, params.y);
 
-        // Click to focus first
+        // Click to focus — Playwright mouse works correctly across iframes using screen coords
+        await page.mouse.click(typeAtX, typeAtY);
+        await page.waitForTimeout(300);
+        // Second click to make sure focus is taken (some fields need double interaction)
         await page.mouse.click(typeAtX, typeAtY);
         await page.waitForTimeout(200);
-        
-        // JS Fallback for focus
-        await page.evaluate(`(function(x, y) {
-          var sel = 'input, textarea, [contenteditable="true"]';
-          var el = document.elementFromPoint(x, y);
-          if (!el) return;
-          var target = el.closest(sel);
-          if (!target) {
-            for (var dx = -10; dx <= 10; dx += 2) {
-              for (var dy = -10; dy <= 10; dy += 2) {
-                var near = document.elementFromPoint(x+dx, y+dy);
-                if (near) { target = near.closest(sel); if (target) break; }
-              }
-              if (target) break;
-            }
-          }
-          if (!target) target = el;
-          if (target) { target.focus(); if (target.tagName==='INPUT'||target.tagName==='TEXTAREA') target.select(); }
-        })(${typeAtX}, ${typeAtY})`);
 
+        // Clear existing value before typing
+        await page.keyboard.down('Control');
+        await page.keyboard.press('a');
+        await page.keyboard.up('Control');
+        await page.keyboard.press('Backspace');
+        await page.waitForTimeout(100);
 
-        if (params.clear) {
-          await page.keyboard.press('Backspace');
-        }
-        await page.keyboard.type(params.text, { delay: 30 });
+        await page.keyboard.type(params.text, { delay: 40 });
         if (params.pressEnter) {
           await page.keyboard.press('Enter');
         }
