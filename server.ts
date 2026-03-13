@@ -416,7 +416,7 @@ async function capturePageState(page: Page) {
     console.error("Failed to get url/title:", e);
   }
 
-  let accessibilityTree = [];
+  let accessibilityTree: any = [];
   try {
     accessibilityTree = await page.evaluate(`(() => {
     const isInteractive = (node) => {
@@ -485,11 +485,69 @@ async function capturePageState(page: Page) {
       if (children.length > 0) info.children = children;
       return info;
     };
-    return walk(document.body);
+    const tree = walk(document.body);
+
+    // Also collect info about iframes — elements inside cross-origin iframes are not
+    // accessible via JS, but we can at least report where the iframes are so the AI
+    // knows to use typeAt with visual coordinates.
+    const iframeInfos = Array.from(document.querySelectorAll('iframe')).map(iframe => {
+      const r = iframe.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return null;
+      return {
+        tag: 'iframe',
+        src: iframe.src || iframe.getAttribute('data-src') || '',
+        name: iframe.name || iframe.id || '',
+        x: Math.round(r.x), y: Math.round(r.y),
+        w: Math.round(r.width), h: Math.round(r.height),
+        note: 'Cross-origin iframe — inputs inside are NOT listed below. Use typeAt(x, y) based on visual coordinates from the screenshot to interact with fields inside this iframe.'
+      };
+    }).filter(Boolean);
+
+    return { tree, iframes: iframeInfos };
   })()`);
+
+    if (typeof accessibilityTree === 'object' && accessibilityTree !== null && 'tree' in (accessibilityTree as any)) {
+      const { tree, iframes } = accessibilityTree as any;
+      accessibilityTree = iframes.length > 0 ? { mainFrame: tree, iframes } : tree;
+    }
   } catch (e) {
     console.error("Failed to evaluate accessibility tree:", e);
   }
+
+  // Also try to get accessible (same-origin) iframe element trees
+  try {
+    const iframeElements = await page.frames();
+    const iframeData: any[] = [];
+    for (const frame of iframeElements) {
+      if (frame === page.mainFrame()) continue;
+      try {
+        const frameEl = await frame.frameElement();
+        if (!frameEl) continue;
+        const box = await frameEl.boundingBox();
+        if (!box || box.width === 0) continue;
+        // Attempt to get elements — will fail silently for cross-origin
+        const subtree = await frame.evaluate(`(() => {
+          const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, button, select, [role="button"]'));
+          return inputs.map(el => {
+            const r = el.getBoundingClientRect();
+            return { tag: el.tagName.toLowerCase(), type: el.type || undefined, placeholder: el.placeholder || undefined, value: el.value || undefined, ariaLabel: el.getAttribute('aria-label') || undefined, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+          }).filter(e => e.w > 0 && e.h > 0);
+        })()`).catch(() => null);
+        if (subtree && Array.isArray(subtree) && subtree.length > 0) {
+          // Translate frame-relative coords to page-level coords
+          const translated = (subtree as any[]).map(e => ({ ...e, x: Math.round(e.x + box.x), y: Math.round(e.y + box.y), inIframe: true }));
+          iframeData.push({ frameUrl: frame.url(), frameOffset: { x: Math.round(box.x), y: Math.round(box.y) }, elements: translated });
+        }
+      } catch (_) {}
+    }
+    if (iframeData.length > 0) {
+      if (typeof accessibilityTree === 'object' && 'iframes' in (accessibilityTree as any)) {
+        (accessibilityTree as any).sameOriginIframeElements = iframeData;
+      } else {
+        accessibilityTree = { mainFrame: accessibilityTree, sameOriginIframeElements: iframeData };
+      }
+    }
+  } catch (_) {}
 
   return {
     screenshot: base64Screenshot,
@@ -735,25 +793,22 @@ async function executeAction(page: Page, action: string, params: any) {
           } catch (_) { /* try next frame */ }
         }
 
-        // Strategy 2: Single mouse click + JS focus verification + keyboard type
+        // Strategy 2: Native mouse click + keyboard type (reliable for cross-origin iframes too)
+        // IMPORTANT: Do NOT try to re-focus via JS — it destroys focus that was set inside an iframe
         if (!taTyped) {
           await page.mouse.move(typeAtX, typeAtY);
           await page.waitForTimeout(100);
           await page.mouse.click(typeAtX, typeAtY);
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(350);
 
-          // Verify focus landed on an input; re-focus if it drifted
-          await page.evaluate(`(function(x, y) {
-            var sel = 'input, textarea, [contenteditable="true"]';
-            var el = document.elementFromPoint(x, y);
-            if (!el) return;
-            var target = el.closest(sel) || el;
-            if (target && document.activeElement !== target) {
-              target.focus();
-            }
-          })(${typeAtX}, ${typeAtY})`);
+          // If clear requested, select all + delete before typing
+          if (params.clear) {
+            await page.keyboard.press('Control+a');
+            await page.waitForTimeout(50);
+            await page.keyboard.press('Delete');
+            await page.waitForTimeout(50);
+          }
 
-          await page.waitForTimeout(150);
           await page.keyboard.type(params.text || '', { delay: 50 });
           taTyped = true;
         }
@@ -819,69 +874,85 @@ async function executeAction(page: Page, action: string, params: any) {
         return { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
       }
       case "captchaType": {
-        // Smart CAPTCHA typer: finds any visible text input across all frames and types into it.
-        // Used when the AI calls waitForUser without coordinates, or as a fallback.
+        // Smart CAPTCHA typer: finds any visible text input across all frames using Playwright native
+        // API (which works for cross-origin iframes unlike JS injection).
         const ctText = params.text || '';
         if (!ctText) return { success: false, reason: 'no text provided' };
 
         let ctDone = false;
 
-        for (const frame of [page, ...page.frames()]) {
-          try {
-            // Step 1: try to inject into the currently focused element first
-            const focusedOk = await frame.evaluate((text: string) => {
-              const el = document.activeElement as HTMLInputElement | null;
-              if (!el) return false;
-              const t = el.tagName;
-              if (!['INPUT', 'TEXTAREA'].includes(t)) return false;
-              const type = (el as HTMLInputElement).type || '';
-              if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'file'].includes(type)) return false;
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-              if (nativeSetter) nativeSetter.call(el, text); else el.value = text;
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
-            }, ctText);
-            if (focusedOk) { ctDone = true; break; }
+        const inputSelector = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="image"]), textarea';
 
-            // Step 2: find a visible empty text input (likely the CAPTCHA field)
-            const injectedOk = await frame.evaluate((text: string) => {
-              const candidates = Array.from(document.querySelectorAll(
-                'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea'
-              )).filter((el: any) => {
-                const rect = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return rect.width > 0 && rect.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-              }) as HTMLInputElement[];
-              if (candidates.length === 0) return false;
-              // Prefer an empty field — CAPTCHA inputs are typically empty
-              const target = candidates.find(el => !el.value) || candidates[0];
-              target.focus();
-              target.click();
-              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-              if (nativeSetter) nativeSetter.call(target, text); else target.value = text;
-              target.dispatchEvent(new Event('input', { bubbles: true }));
-              target.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
-            }, ctText);
-            if (injectedOk) {
-              // Also send keystrokes for sites that depend on keyboard events
-              await page.waitForTimeout(80);
-              await page.keyboard.type(ctText, { delay: 30 });
-              ctDone = true;
-              break;
+        // Strategy A: Use Playwright native frame.locator() to find input in any frame
+        // This works even for cross-origin iframes (uses CDP, not JS injection)
+        const allFrames = [page.mainFrame(), ...page.frames()];
+        for (const frame of allFrames) {
+          try {
+            const loc = frame.locator(inputSelector).first();
+            const box = await loc.boundingBox({ timeout: 1500 });
+            if (!box) continue;
+
+            // Convert frame-relative coords to page-level coords
+            let absX = box.x + box.width / 2;
+            let absY = box.y + box.height / 2;
+            if (frame !== page.mainFrame()) {
+              const frameEl = await frame.frameElement();
+              const frameBox = await frameEl.boundingBox();
+              if (frameBox) { absX += frameBox.x; absY += frameBox.y; }
             }
+
+            // Native mouse click to focus the element in the browser
+            await page.mouse.click(absX, absY);
+            await page.waitForTimeout(200);
+            // Clear any existing text, then type
+            await page.keyboard.press('Control+a');
+            await page.waitForTimeout(40);
+            await page.keyboard.press('Delete');
+            await page.waitForTimeout(40);
+            await page.keyboard.type(ctText, { delay: 50 });
+            ctDone = true;
+            break;
           } catch (_) {}
         }
 
-        // Verify the text landed
+        // Strategy B: JS injection fallback for same-origin frames (if native failed)
+        if (!ctDone) {
+          for (const frame of allFrames) {
+            try {
+              const injectedOk = await frame.evaluate((text: string) => {
+                const candidates = Array.from(document.querySelectorAll(
+                  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea'
+                )).filter((el: any) => {
+                  const rect = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  return rect.width > 0 && rect.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                }) as HTMLInputElement[];
+                if (candidates.length === 0) return false;
+                const target = candidates.find(el => !el.value) || candidates[0];
+                target.focus();
+                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                  || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                if (nativeSetter) nativeSetter.call(target, text); else target.value = text;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }, ctText);
+              if (injectedOk) {
+                await page.waitForTimeout(80);
+                await page.keyboard.type(ctText, { delay: 30 });
+                ctDone = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+
+        // Verify the text landed (best effort — cross-origin iframes can't be checked)
         let ctVerified = false;
         if (ctText.length > 0) {
           await page.waitForTimeout(200);
           const snip = ctText.substring(0, Math.min(4, ctText.length));
-          for (const f of [page, ...page.frames()]) {
+          for (const f of allFrames) {
             try {
               const val = await f.evaluate((s: string) => {
                 const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea'));

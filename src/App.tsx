@@ -215,14 +215,29 @@ export default function App() {
 
       RULE 2 - CAPTCHA HANDLING (MOST IMPORTANT):
       - When you see a CAPTCHA image on screen, you MUST follow this EXACT procedure:
-        STEP A: Look at the screenshot carefully. Identify the CAPTCHA input box visually — it's an empty text field near the CAPTCHA image.
-        STEP B: Identify the CENTER X and CENTER Y pixel coordinates of that CAPTCHA input field from the screenshot.
-        STEP C: ALWAYS call waitForUser to ask the human to read and type the CAPTCHA text. This is the ONLY reliable method.
+        STEP A: Look at the screenshot carefully. Find the CAPTCHA challenge (image, text puzzle, or audio).
+        STEP B: Look for the input field where you type the answer — it is visually near the CAPTCHA image.
+        STEP C: Identify the CENTER X and CENTER Y pixel coordinates of that CAPTCHA input field from the screenshot.
+        STEP D: ALWAYS call waitForUser to ask the human to read and type the CAPTCHA text.
           waitForUser(message="Please type the CAPTCHA text you see in the image:", x=<center_x_of_input>, y=<center_y_of_input>)
-        STEP D: The human will type the CAPTCHA text and the system will automatically type it at those coordinates.
-        STEP E: After the human types, click "Next" or "Submit" to proceed.
-        - NEVER attempt typeBySelector for CAPTCHA fields — they are often in iframes or shadow DOM and the selector fails.
+          ⚠️ If you cannot find the CAPTCHA input visually but you see a CAPTCHA, still call waitForUser without x/y coordinates — the system will automatically find the input field.
+        STEP E: The human types the text and the system automatically types it into the browser.
+        STEP F: After typing, click the "Next", "Submit", or "Verify" button — DO NOT call waitForUser again.
+        - NEVER attempt typeBySelector for CAPTCHA fields — they are always in iframes and selectors fail.
         - NEVER try to guess or fabricate CAPTCHA text — always call waitForUser.
+        - NEVER call waitForUser a second time if the CAPTCHA was just typed — that is confirmed by the CAPTCHA JUST TYPED note above.
+
+      RULE 2B - GOOGLE FORMS / OAUTH IFRAMES (CRITICAL):
+      - Google sign-in, Google reCAPTCHA, and many third-party login forms are inside IFRAMES.
+      - The accessibility tree will show "iframe" entries with their position and size on screen.
+      - Elements INSIDE cross-origin iframes do NOT appear in the accessibility tree — you must use VISUAL coordinates.
+      - ALWAYS use typeAt(x, y, text) to type inside iframes — NEVER use typeBySelector or type(index).
+      - For Google email forms:
+        * Look at the screenshot. The email input is inside the Google iframe.
+        * Use typeAt(x=<center of email input>, y=<center of email input>, text=<email>, pressEnter=true).
+        * After pressing Enter, wait for the password page to appear — look for the title change or a password field.
+        * DO NOT click "Next" button with click(index) — use typeAt with pressEnter=true OR clickAt(x,y) using the button's visual coordinates.
+      - When you see multiple input fields appearing in sequence (email → password), that is normal multi-step auth — proceed through each step.
 
       RULE 3 - VERIFY BEFORE PROCEEDING (MOST IMPORTANT):
       - After EVERY action, look at the new screenshot BEFORE doing anything else.
@@ -284,8 +299,8 @@ export default function App() {
       - clickByText(text: string)
       - clickBySelector(selector: string)
       - type(index: number, text: string, clear?: boolean, pressEnter?: boolean)
-      - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
-      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // Best for forms. Selector supports comma lists. RULES: for password fields ALWAYS use 'input[type="password"]'. For email fields use 'input[type="email"]'. NEVER use for CAPTCHA.
+      - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean) // ✅ WORKS IN IFRAMES (uses native keyboard events). Use for Google forms, CAPTCHAs, and any iframe content. x,y are pixel coordinates from the screenshot.
+      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // Best for MAIN FRAME forms only. NEVER use inside iframes/CAPTCHAs — use typeAt instead. For password: 'input[type="password"]', email: 'input[type="email"]'.
       - waitForUser(message: string, x?: number, y?: number) // PAUSE and ask the human to type something (e.g., CAPTCHA text). The human's reply is automatically typed at (x, y) on the page. Always use this for CAPTCHAs.
       - fill(selector: string, text: string, index?: number)
       - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string)
