@@ -100,14 +100,14 @@ async function startServer() {
       server: { 
         middlewareMode: true,
         hmr: { server },
-      },
-      watch: {
-        ignored: [
-          '**/.local/**',
-          '**/.cache/**',
-          '**/.git/**',
-          '**/node_modules/**',
-        ],
+        watch: {
+          ignored: [
+            /\.local/,
+            /\.cache/,
+            /\.git/,
+            '**/node_modules/**',
+          ],
+        },
       },
       appType: "spa",
     });

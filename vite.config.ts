@@ -21,7 +21,10 @@ export default defineConfig(({mode}) => {
       allowedHosts: true,
     },
     watch: {
-      ignored: ['**/.local/**', '**/.git/**'],
+      ignored: [
+        /[\/\\]?\.local[\/\\]/,
+        /[\/\\]?\.git[\/\\]/,
+      ],
     },
   };
 });
