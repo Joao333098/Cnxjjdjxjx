@@ -275,7 +275,7 @@ export default function App() {
               role: "user",
               content: [
                 { type: "text", text: systemPrompt },
-                ...(screenshot && screenshot !== 'data:image/jpeg;base64,' ? [{ type: "image_url", image_url: { url: screenshot } }] : []),
+                ...(screenshot ? [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshot}` } }] : []),
                 { type: "text", text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
               ]
             }
