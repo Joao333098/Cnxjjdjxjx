@@ -17,7 +17,9 @@ import {
   MessageSquare,
   Activity,
   MousePointer2,
-  Trash2
+  Trash2,
+  Lightbulb,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -62,6 +64,9 @@ export default function App() {
   const [waitingForUserInput, setWaitingForUserInput] = useState(false);
   const [captchaPendingCoords, setCaptchaPendingCoords] = useState<{x: number, y: number} | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState('');
+  const [pageHints, setPageHints] = useState('');
+  const [showHintsPanel, setShowHintsPanel] = useState(false);
+  const [hintsInput, setHintsInput] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
@@ -192,6 +197,14 @@ export default function App() {
       
       CURRENT STEP: ${stepCountRef.current}
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
+
+      ${pageHints ? `
+      ===== PAGE HINTS FROM USER (FOLLOW THESE EXACTLY) =====
+      The user has provided specific instructions for this page/site:
+      ${pageHints}
+      These instructions override default behavior. Follow them precisely.
+      =====
+      ` : ''}
       
       ${captchaJustTyped ? `
       ⚠️ CAPTCHA JUST TYPED — CRITICAL OVERRIDE ⚠️
@@ -226,6 +239,14 @@ export default function App() {
         - NEVER attempt typeBySelector for CAPTCHA fields — they are always in iframes and selectors fail.
         - NEVER try to guess or fabricate CAPTCHA text — always call waitForUser.
         - NEVER call waitForUser a second time if the CAPTCHA was just typed — that is confirmed by the CAPTCHA JUST TYPED note above.
+
+      ⛔ CAPTCHA SUBMIT BLOCK — ABSOLUTE RULE:
+      Before clicking ANY submit/next/continue/verify button, look at the screenshot and ask:
+      "Is there a CAPTCHA input field visible on this page that appears EMPTY?"
+      - If YES → DO NOT click Next/Submit. You MUST call waitForUser first to get the CAPTCHA text.
+      - If the CAPTCHA field is visually empty and you click Next, the form will fail and the user must start over.
+      - An empty CAPTCHA field looks like a blank text box near a distorted image or puzzle.
+      - ONLY click Next/Submit when the CAPTCHA input box visibly contains text OR when postCaptchaRef confirms the text was just typed.
 
       RULE 2B - GOOGLE FORMS / OAUTH IFRAMES (CRITICAL):
       - Google sign-in, Google reCAPTCHA, and many third-party login forms are inside IFRAMES.
@@ -661,6 +682,15 @@ export default function App() {
                 <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${showElements ? 'left-4.5' : 'left-0.5'}`} />
               </button>
             </div>
+            <button
+              onClick={() => { setHintsInput(pageHints); setShowHintsPanel(!showHintsPanel); }}
+              title="Page Hints for AI"
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors border text-[10px] font-bold uppercase tracking-widest ${pageHints ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'hover:bg-white/10 border-white/10 text-zinc-500'}`}
+            >
+              <Lightbulb className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Hints</span>
+              {pageHints && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />}
+            </button>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-zinc-500 uppercase font-bold">Scale</span>
               <input 
@@ -723,6 +753,64 @@ export default function App() {
               Type
             </button>
           </div>
+
+          {/* Page Hints Panel */}
+          <AnimatePresence>
+            {showHintsPanel && (
+              <motion.div
+                initial={{ y: -20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -20, opacity: 0 }}
+                className="absolute top-4 left-4 right-4 z-50 max-w-lg mx-auto"
+              >
+                <div className="bg-black/90 backdrop-blur-xl border border-yellow-500/30 rounded-2xl p-4 shadow-[0_0_40px_rgba(234,179,8,0.1)]">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-yellow-500/20 flex items-center justify-center">
+                        <Lightbulb className="w-4 h-4 text-yellow-400" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Dicas para a IA</p>
+                        <p className="text-[10px] text-zinc-500">Instruções específicas para essa página/site</p>
+                      </div>
+                    </div>
+                    <button onClick={() => setShowHintsPanel(false)} className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-500">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <textarea
+                    value={hintsInput}
+                    onChange={(e) => setHintsInput(e.target.value)}
+                    placeholder={"Ex: Nesse site o campo de CAPTCHA fica abaixo da imagem. Após preencher, clique em 'Verificar'. O login tem 2 etapas: email e depois senha."}
+                    rows={4}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-[11px] text-white font-mono outline-none focus:border-yellow-500/50 resize-none mb-3 leading-relaxed placeholder:text-zinc-600"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => { setPageHints(hintsInput); setShowHintsPanel(false); }}
+                      className="flex-1 py-2 bg-yellow-500 text-black text-[11px] font-black uppercase tracking-widest rounded-xl hover:bg-yellow-400 transition-colors"
+                    >
+                      Salvar Dicas
+                    </button>
+                    {pageHints && (
+                      <button
+                        onClick={() => { setPageHints(''); setHintsInput(''); setShowHintsPanel(false); }}
+                        className="py-2 px-3 bg-red-500/20 text-red-400 text-[11px] font-bold uppercase rounded-xl hover:bg-red-500/30 transition-colors border border-red-500/20"
+                      >
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+                  {pageHints && (
+                    <div className="mt-2 p-2 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
+                      <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-widest mb-1">Dicas ativas:</p>
+                      <p className="text-[10px] text-zinc-400 line-clamp-2">{pageHints}</p>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Agent HUD - Floating Status Overlay */}
           <AnimatePresence>
