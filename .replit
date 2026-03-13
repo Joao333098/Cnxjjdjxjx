@@ -45,4 +45,4 @@ externalPort = 80
 [userenv]
 
 [userenv.shared]
-VITE_NOVA_API_KEY = "7505af6f-584e-4667-a521-4054123b54c6"
+VITE_NOVA_API_KEY = "fff72e9c-ef32-4752-bf7f-31cf0e37e796"
