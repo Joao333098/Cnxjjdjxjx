@@ -818,6 +818,82 @@ async function executeAction(page: Page, action: string, params: any) {
         }
         return { success: true, verified: verifiedValue.length > 0, fieldValue: verifiedValue };
       }
+      case "captchaType": {
+        // Smart CAPTCHA typer: finds any visible text input across all frames and types into it.
+        // Used when the AI calls waitForUser without coordinates, or as a fallback.
+        const ctText = params.text || '';
+        if (!ctText) return { success: false, reason: 'no text provided' };
+
+        let ctDone = false;
+
+        for (const frame of [page, ...page.frames()]) {
+          try {
+            // Step 1: try to inject into the currently focused element first
+            const focusedOk = await frame.evaluate((text: string) => {
+              const el = document.activeElement as HTMLInputElement | null;
+              if (!el) return false;
+              const t = el.tagName;
+              if (!['INPUT', 'TEXTAREA'].includes(t)) return false;
+              const type = (el as HTMLInputElement).type || '';
+              if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'file'].includes(type)) return false;
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              if (nativeSetter) nativeSetter.call(el, text); else el.value = text;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }, ctText);
+            if (focusedOk) { ctDone = true; break; }
+
+            // Step 2: find a visible empty text input (likely the CAPTCHA field)
+            const injectedOk = await frame.evaluate((text: string) => {
+              const candidates = Array.from(document.querySelectorAll(
+                'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea'
+              )).filter((el: any) => {
+                const rect = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+              }) as HTMLInputElement[];
+              if (candidates.length === 0) return false;
+              // Prefer an empty field — CAPTCHA inputs are typically empty
+              const target = candidates.find(el => !el.value) || candidates[0];
+              target.focus();
+              target.click();
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              if (nativeSetter) nativeSetter.call(target, text); else target.value = text;
+              target.dispatchEvent(new Event('input', { bubbles: true }));
+              target.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }, ctText);
+            if (injectedOk) {
+              // Also send keystrokes for sites that depend on keyboard events
+              await page.waitForTimeout(80);
+              await page.keyboard.type(ctText, { delay: 30 });
+              ctDone = true;
+              break;
+            }
+          } catch (_) {}
+        }
+
+        // Verify the text landed
+        let ctVerified = false;
+        if (ctText.length > 0) {
+          await page.waitForTimeout(200);
+          const snip = ctText.substring(0, Math.min(4, ctText.length));
+          for (const f of [page, ...page.frames()]) {
+            try {
+              const val = await f.evaluate((s: string) => {
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea'));
+                const match = inputs.find((el: any) => el.value && el.value.includes(s));
+                return match ? (match as any).value : '';
+              }, snip);
+              if (val) { ctVerified = true; break; }
+            } catch (_) {}
+          }
+        }
+        return { success: ctDone, verified: ctVerified };
+      }
       case "forceTypeAt": {
         // Force-type by directly injecting value via JavaScript (bypasses focus/iframe issues)
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {

@@ -448,20 +448,22 @@ export default function App() {
       // Mark that CAPTCHA was just typed so next agent step knows to click Next immediately
       postCaptchaRef.current = captchaText;
 
+      setCaptchaPendingCoords(null);
+      setStatus('Typing CAPTCHA...');
       if (captchaPendingCoords) {
-        const coords = captchaPendingCoords;
-        setCaptchaPendingCoords(null);
-        setStatus('Typing CAPTCHA...');
+        // Coords known — type directly at the CAPTCHA field location
         socket.emit('execute-action', {
           action: 'typeAt',
-          params: { x: coords.x, y: coords.y, text: captchaText, pressEnter: false }
+          params: { x: captchaPendingCoords.x, y: captchaPendingCoords.y, text: captchaText, pressEnter: false }
         });
         // Agent loop resumes on action-completed
       } else {
-        // No coords — just continue with context
-        setCaptchaPendingCoords(null);
-        lastActionRef.current = { action: 'captcha-typed', params: { text: captchaText } };
-        setTimeout(runAgentStep, 500);
+        // No coords — use smart captchaType that finds any visible input in any frame
+        socket.emit('execute-action', {
+          action: 'captchaType',
+          params: { text: captchaText }
+        });
+        // Agent loop also resumes on action-completed
       }
       return;
     }
