@@ -750,28 +750,41 @@ async function executeAction(page: Page, action: string, params: any) {
         break;
       case "typeBySelector":
         if (!params.selector) throw new Error("selector required for typeBySelector");
+        // Build candidate selector list: original + smart fallbacks
+        const tbsCandidates: string[] = [params.selector];
+        const tbsSel = params.selector.toLowerCase();
+        if (tbsSel.includes('password')) {
+          tbsCandidates.push('input[type="password"]', 'input[autocomplete*="password"]');
+        }
+        if (tbsSel.includes('email') || tbsSel.includes('username') || tbsSel.includes('user')) {
+          tbsCandidates.push('input[type="email"]', 'input[type="text"][name*="email"]', 'input[name="email"]', 'input[name="username"]');
+        }
+        // deduplicate
+        const tbsUniq = [...new Set(tbsCandidates)];
         let tbsTyped = false;
         const tbsFrames: any[] = [page, ...page.frames()];
-        for (const tbsFrame of tbsFrames) {
-          try {
-            const tbsEl = tbsFrame.locator(params.selector).first();
-            await tbsEl.waitFor({ state: 'attached', timeout: 3000 });
-            await tbsEl.scrollIntoViewIfNeeded({ timeout: 3000 });
-            await tbsEl.click({ force: true, timeout: 3000 });
-            await page.waitForTimeout(150);
-            if (params.clear !== false) {
-              await page.keyboard.down('Control');
-              await page.keyboard.press('a');
-              await page.keyboard.up('Control');
-              await page.keyboard.press('Backspace');
-            }
-            await page.keyboard.type(params.text || "", { delay: 40 });
-            if (params.pressEnter) await page.keyboard.press('Enter');
-            tbsTyped = true;
-            break;
-          } catch (_) { /* try next frame */ }
+        outer: for (const tbsCandidate of tbsUniq) {
+          for (const tbsFrame of tbsFrames) {
+            try {
+              const tbsEl = tbsFrame.locator(tbsCandidate).first();
+              await tbsEl.waitFor({ state: 'attached', timeout: 2500 });
+              await tbsEl.scrollIntoViewIfNeeded({ timeout: 2500 });
+              await tbsEl.click({ force: true, timeout: 2500 });
+              await page.waitForTimeout(150);
+              if (params.clear !== false) {
+                await page.keyboard.down('Control');
+                await page.keyboard.press('a');
+                await page.keyboard.up('Control');
+                await page.keyboard.press('Backspace');
+              }
+              await page.keyboard.type(params.text || "", { delay: 40 });
+              if (params.pressEnter) await page.keyboard.press('Enter');
+              tbsTyped = true;
+              break outer;
+            } catch (_) { /* try next */ }
+          }
         }
-        if (!tbsTyped) throw new Error(`typeBySelector: element not found with selector "${params.selector}"`);
+        if (!tbsTyped) throw new Error(`typeBySelector: element not found with selector "${params.selector}" (also tried: ${tbsUniq.slice(1).join(', ')})`);
         return { success: true, selector: params.selector };
       case "fill":
         if (params.selector) {

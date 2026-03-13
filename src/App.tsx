@@ -223,6 +223,12 @@ export default function App() {
       - If the accessibility tree or screenshot shows a field already has content (e.g., email already typed), DO NOT type in that field again.
       - Look at the screenshot: fields with text already in them are DONE. Move to the next empty required field.
 
+      RULE 4 - CORRECT SELECTORS FOR COMMON FIELDS:
+      - Password field → ALWAYS use selector: 'input[type="password"]'  (NEVER input[name="password"])
+      - Email field    → ALWAYS use selector: 'input[type="email"]'
+      - Search field   → use 'input[type="search"]' or 'input[name="q"]'
+      - Username       → 'input[name="username"],input[name="identifier"],input[type="text"]'
+
       ===== GENERAL REASONING =====
       - Think like a careful human. Look at visual cues, colors, layout.
       - PRECISION: Use element index whenever available. It is 100% accurate.
@@ -248,7 +254,7 @@ export default function App() {
       - clickBySelector(selector: string)
       - type(index: number, text: string, clear?: boolean, pressEnter?: boolean)
       - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
-      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // BEST for CAPTCHA: finds input by CSS selector and types into it. selector supports comma lists e.g. 'input[placeholder*="hear or see"],input[jsname="whsOnd"]'
+      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // Best for forms & CAPTCHA. Selector supports comma lists. RULES: for password fields ALWAYS use 'input[type="password"]'. For email fields use 'input[type="email"]'. For CAPTCHA: 'input[placeholder*="hear or see"],input[aria-label*="captcha" i],input[jsname="whsOnd"],input[name="ca"]'. NEVER use input[name="password"] — it often doesn't exist.
       - fill(selector: string, text: string, index?: number)
       - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string)
       - scroll(direction: "up" | "down", amount: number)
