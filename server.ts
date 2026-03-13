@@ -647,32 +647,73 @@ async function executeAction(page: Page, action: string, params: any) {
         await page.mouse.move(params.x, params.y);
         await page.mouse.click(params.x, params.y, { button: 'right' });
         break;
-      case "typeAt":
+      case "typeAt": {
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
           throw new Error("Invalid coordinates for typeAt");
         }
         const typeAtX = Math.max(0, params.x);
         const typeAtY = Math.max(0, params.y);
+        let taTyped = false;
 
-        // Click to focus — Playwright mouse works correctly across iframes using screen coords
-        await page.mouse.click(typeAtX, typeAtY);
-        await page.waitForTimeout(300);
-        // Second click to make sure focus is taken (some fields need double interaction)
-        await page.mouse.click(typeAtX, typeAtY);
-        await page.waitForTimeout(200);
+        // Strategy 1: Search all frames for an input at the given viewport coordinates
+        const allFrames = [page, ...page.frames()];
+        for (const frame of allFrames) {
+          try {
+            // For iframes, translate viewport coords to frame-relative coords
+            let fX = typeAtX, fY = typeAtY;
+            if (frame !== (page as any)) {
+              const frameEl = await (frame as any).frameElement();
+              if (!frameEl) continue;
+              const box = await frameEl.boundingBox();
+              if (!box) continue;
+              fX = typeAtX - box.x;
+              fY = typeAtY - box.y;
+              if (fX < 0 || fY < 0 || fX > box.width || fY > box.height) continue;
+            }
 
-        // Clear existing value before typing
-        await page.keyboard.down('Control');
-        await page.keyboard.press('a');
-        await page.keyboard.up('Control');
-        await page.keyboard.press('Backspace');
-        await page.waitForTimeout(100);
+            // Find input/textarea at these coordinates inside this frame
+            const found = await frame.evaluate(([x, y]: [number, number]) => {
+              const el = document.elementFromPoint(x, y) as HTMLElement | null;
+              if (!el) return false;
+              const target = (el.closest('input, textarea, [contenteditable="true"]') || el) as HTMLInputElement;
+              if (!target) return false;
+              const tag = target.tagName;
+              if (!['INPUT', 'TEXTAREA'].includes(tag) && target.contentEditable !== 'true') return false;
+              // Focus + clear
+              target.focus();
+              if ('value' in target) (target as HTMLInputElement).value = '';
+              return true;
+            }, [fX, fY] as [number, number]);
 
-        await page.keyboard.type(params.text, { delay: 40 });
-        if (params.pressEnter) {
-          await page.keyboard.press('Enter');
+            if (found) {
+              await page.waitForTimeout(150);
+              await frame.evaluate(([x, y]: [number, number]) => {
+                const el = document.elementFromPoint(x, y) as HTMLInputElement | null;
+                if (el) { el.focus(); el.click(); }
+              }, [fX, fY] as [number, number]);
+              await page.waitForTimeout(150);
+              await page.keyboard.type(params.text || '', { delay: 45 });
+              taTyped = true;
+              break;
+            }
+          } catch (_) { /* try next frame */ }
         }
+
+        // Strategy 2: Plain mouse click + keyboard type (works for simple pages)
+        if (!taTyped) {
+          await page.mouse.move(typeAtX, typeAtY);
+          await page.waitForTimeout(100);
+          await page.mouse.click(typeAtX, typeAtY);
+          await page.waitForTimeout(350);
+          await page.mouse.click(typeAtX, typeAtY);
+          await page.waitForTimeout(200);
+          await page.keyboard.type(params.text || '', { delay: 45 });
+          taTyped = true;
+        }
+
+        if (params.pressEnter) await page.keyboard.press('Enter');
         break;
+      }
       case "type":
         if (params.index !== undefined) {
           const targetInfo = await page.evaluate(`(function(index) {
