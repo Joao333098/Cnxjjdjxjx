@@ -507,26 +507,41 @@ async function executeAction(page: Page, action: string, params: any) {
           if (target) { target.focus(); target.click(); return { success: true, tag: target.tagName.toLowerCase(), id: target.id }; }
           return { success: false, reason: 'no interactive element found at coordinates' };
         })(${clickAtX}, ${clickAtY})`);
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return clickAtResult;
       case "click":
         if (params.index !== undefined) {
+          // Step 1: find element coords via JS
           const indexResult = await page.evaluate(`(function(index) {
             var target = document.querySelector('[data-agent-index="' + index + '"]');
             if (target) {
               target.scrollIntoView({ behavior: 'smooth', block: 'center' });
               var style = window.getComputedStyle(target);
               if (style.display === 'none' || style.visibility === 'hidden') return { success: false, reason: 'hidden' };
-              target.focus();
-              target.click();
               var rect = target.getBoundingClientRect();
               return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
             }
             return { success: false, reason: 'not found' };
           })(${JSON.stringify(params.index)})`);
+          if (indexResult && indexResult.success && typeof indexResult.x === 'number') {
+            // Step 2: real Playwright mouse click at element center
+            await page.mouse.move(indexResult.x, indexResult.y);
+            await page.waitForTimeout(80);
+            await page.mouse.click(indexResult.x, indexResult.y);
+          } else {
+            // Fallback: JS click
+            await page.evaluate(`(function(index) {
+              var t = document.querySelector('[data-agent-index="' + index + '"]');
+              if (t) { t.focus(); t.click(); }
+            })(${JSON.stringify(params.index)})`);
+          }
+          // Wait for any navigation triggered by the click
+          try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
           return indexResult;
         }
         if (params.selector) {
           await page.click(params.selector, { timeout: 5000 });
+          try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
           return { success: true, selector: params.selector };
         }
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
@@ -566,6 +581,8 @@ async function executeAction(page: Page, action: string, params: any) {
           }
           return null;
         })(${clickX}, ${clickY})`);
+        // Wait for any navigation triggered by the click
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return { element: clickResult };
       case "clickByText":
         if (!params.text) throw new Error("Text is required for clickByText");
@@ -581,6 +598,7 @@ async function executeAction(page: Page, action: string, params: any) {
           }
           return { success: false };
         })(${JSON.stringify(params.text)})`);
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return textResult;
       case "clickBySelector":
         if (!params.selector) throw new Error("Selector is required for clickBySelector");
@@ -748,44 +766,55 @@ async function executeAction(page: Page, action: string, params: any) {
           await page.keyboard.press("Enter");
         }
         break;
-      case "typeBySelector":
+      case "typeBySelector": {
         if (!params.selector) throw new Error("selector required for typeBySelector");
         // Build candidate selector list: original + smart fallbacks
         const tbsCandidates: string[] = [params.selector];
         const tbsSel = params.selector.toLowerCase();
         if (tbsSel.includes('password')) {
-          tbsCandidates.push('input[type="password"]', 'input[autocomplete*="password"]');
+          tbsCandidates.push('input[type="password"]', 'input[autocomplete*="password"]', 'input[autocomplete="current-password"]');
         }
-        if (tbsSel.includes('email') || tbsSel.includes('username') || tbsSel.includes('user')) {
-          tbsCandidates.push('input[type="email"]', 'input[type="text"][name*="email"]', 'input[name="email"]', 'input[name="username"]');
+        if (tbsSel.includes('email') || tbsSel.includes('username') || tbsSel.includes('user') || tbsSel.includes('identifier')) {
+          tbsCandidates.push('input[type="email"]', 'input[name="email"]', 'input[name="username"]', 'input[name="identifier"]');
         }
-        // deduplicate
         const tbsUniq = [...new Set(tbsCandidates)];
+
+        // Retry up to 3 times with increasing wait — handles page transitions after click
         let tbsTyped = false;
-        const tbsFrames: any[] = [page, ...page.frames()];
-        outer: for (const tbsCandidate of tbsUniq) {
-          for (const tbsFrame of tbsFrames) {
-            try {
-              const tbsEl = tbsFrame.locator(tbsCandidate).first();
-              await tbsEl.waitFor({ state: 'attached', timeout: 2500 });
-              await tbsEl.scrollIntoViewIfNeeded({ timeout: 2500 });
-              await tbsEl.click({ force: true, timeout: 2500 });
-              await page.waitForTimeout(150);
-              if (params.clear !== false) {
-                await page.keyboard.down('Control');
-                await page.keyboard.press('a');
-                await page.keyboard.up('Control');
-                await page.keyboard.press('Backspace');
-              }
-              await page.keyboard.type(params.text || "", { delay: 40 });
-              if (params.pressEnter) await page.keyboard.press('Enter');
-              tbsTyped = true;
-              break outer;
-            } catch (_) { /* try next */ }
+        const tbsAttempts = [0, 1500, 3000]; // ms to wait before each attempt
+        for (const tbsWait of tbsAttempts) {
+          if (tbsWait > 0) {
+            // Wait for page to settle after navigation
+            try { await page.waitForLoadState('domcontentloaded', { timeout: tbsWait }); } catch (_) {}
+            await page.waitForTimeout(tbsWait > 1000 ? 500 : 200);
           }
+          const tbsFrames: any[] = [page, ...page.frames()];
+          outer: for (const tbsCandidate of tbsUniq) {
+            for (const tbsFrame of tbsFrames) {
+              try {
+                const tbsEl = tbsFrame.locator(tbsCandidate).first();
+                await tbsEl.waitFor({ state: 'attached', timeout: 1500 });
+                await tbsEl.scrollIntoViewIfNeeded({ timeout: 1500 });
+                await tbsEl.click({ force: true, timeout: 1500 });
+                await page.waitForTimeout(150);
+                if (params.clear !== false) {
+                  await page.keyboard.down('Control');
+                  await page.keyboard.press('a');
+                  await page.keyboard.up('Control');
+                  await page.keyboard.press('Backspace');
+                }
+                await page.keyboard.type(params.text || "", { delay: 40 });
+                if (params.pressEnter) await page.keyboard.press('Enter');
+                tbsTyped = true;
+                break outer;
+              } catch (_) { /* try next frame/selector */ }
+            }
+          }
+          if (tbsTyped) break;
         }
         if (!tbsTyped) throw new Error(`typeBySelector: element not found with selector "${params.selector}" (also tried: ${tbsUniq.slice(1).join(', ')})`);
         return { success: true, selector: params.selector };
+      }
       case "fill":
         if (params.selector) {
           await page.fill(params.selector, params.text || "");
