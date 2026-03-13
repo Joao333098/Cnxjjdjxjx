@@ -352,23 +352,35 @@ async function startServer() {
     });
   });
 
-  // Kill any existing processes on this port before binding
-  try { execSync(`fuser -k ${PORT}/tcp 24678/tcp 2>/dev/null || true`); } catch (_) {}
-  await new Promise(r => setTimeout(r, 500));
+  // Graceful shutdown — releases the port cleanly when Replit restarts the workflow
+  const shutdown = async (signal: string) => {
+    console.log(`${signal} received, shutting down...`);
+    server.close(() => process.exit(0));
+    // Force-exit after 3s if connections are keeping it alive
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // Try to bind to the port, retrying a few times to let a previous instance finish
+  const tryListen = (retriesLeft: number) => {
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
 
-  server.on('error', (err: any) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`Port ${PORT} is already in use. Exiting so the process manager can restart cleanly.`);
-      process.exit(1);
-    } else {
-      console.error('Server error:', err);
-      process.exit(1);
-    }
-  });
+    server.once('error', async (err: any) => {
+      if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
+        console.log(`Port ${PORT} busy, retrying in 2s... (${retriesLeft} attempts left)`);
+        await new Promise(r => setTimeout(r, 2000));
+        tryListen(retriesLeft - 1);
+      } else {
+        console.error(`Could not bind to port ${PORT}:`, err.message);
+        process.exit(1);
+      }
+    });
+  };
+
+  tryListen(5);
 }
 
 async function capturePageState(page: Page) {
