@@ -5,12 +5,24 @@ import http from "http";
 import cors from "cors";
 import path from "path";
 import { execSync } from "child_process";
+import { readFileSync } from "fs";
 import { Browser, Page } from "playwright-chromium";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+
+function loadConfig() {
+  try {
+    const raw = readFileSync(new URL('./config.json', import.meta.url), 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+const appConfig = loadConfig();
 
 function findSystemChromium(): string | undefined {
   try {
@@ -50,12 +62,13 @@ async function startServer() {
   app.post("/api/nova", async (req, res) => {
     const { messages } = req.body;
     try {
-      const apiKey = process.env.VITE_NOVA_API_KEY;
+      const apiKey = appConfig.nova_api_key || process.env.VITE_NOVA_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
 
       const isOpenRouter = apiKey.startsWith('sk-or-');
       const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
-      const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-pro-v1';
+      const defaultModel = isOpenRouter ? 'amazon/nova-pro-v1' : (appConfig.nova_model || 'nova-pro-v1');
+      const modelName = defaultModel;
 
       // Make raw fetch so we can inspect the actual response body on errors
       const rawResponse = await fetch(`${baseURL}/chat/completions`, {
@@ -339,7 +352,7 @@ async function startServer() {
     });
   });
 
-  // Kill any existing processes on this port and the Vite HMR port before binding
+  // Kill any existing processes on this port before binding
   try { execSync(`fuser -k ${PORT}/tcp 24678/tcp 2>/dev/null || true`); } catch (_) {}
   await new Promise(r => setTimeout(r, 500));
 
@@ -347,12 +360,13 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
-  server.on('error', async (err: any) => {
+  server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {
-      console.log(`Port ${PORT} still in use, retrying...`);
-      try { execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`); } catch (_) {}
-      await new Promise(r => setTimeout(r, 800));
-      server.listen(PORT, "0.0.0.0");
+      console.error(`Port ${PORT} is already in use. Exiting so the process manager can restart cleanly.`);
+      process.exit(1);
+    } else {
+      console.error('Server error:', err);
+      process.exit(1);
     }
   });
 }
