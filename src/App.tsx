@@ -65,7 +65,7 @@ export default function App() {
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
-  const stateRef = useRef({ screenshot: '', url: '', title: '', accessibilityTree: null as any });
+  const stateRef = useRef({ screenshot: '', url: '', title: '', accessibilityTree: null as any, iframeInfo: [] as any[], iframeElements: [] as any[] });
   const isProcessingRef = useRef(false);
   const userPromptRef = useRef('');
   const stepCountRef = useRef(0);
@@ -171,7 +171,7 @@ export default function App() {
       }
     }, 25000);
 
-    const { screenshot, url, title, accessibilityTree } = stateRef.current;
+    const { screenshot, url, title, accessibilityTree, iframeInfo, iframeElements } = stateRef.current;
     if (!screenshot) {
       console.log('No screenshot available, retrying in 1s...');
       setTimeout(runAgentStep, 1000);
@@ -344,7 +344,7 @@ export default function App() {
               content: [
                 { type: "text", text: systemPrompt },
                 ...(screenshot ? [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshot}` } }] : []),
-                { type: "text", text: `Accessibility Tree: ${JSON.stringify(accessibilityTree).slice(0, 15000)}` }
+                { type: "text", text: `Accessibility Tree (main frame): ${JSON.stringify(accessibilityTree).slice(0, 12000)}${iframeInfo && iframeInfo.length > 0 ? `\n\nIFRAMES ON PAGE (cross-origin — elements inside NOT in tree above, use typeAt with visual coords):\n${JSON.stringify(iframeInfo)}` : ''}${iframeElements && iframeElements.length > 0 ? `\n\nSAME-ORIGIN IFRAME ELEMENTS (absolute page coords, inIframe=true):\n${JSON.stringify(iframeElements).slice(0, 3000)}` : ''}` }
               ]
             }
           ],
@@ -946,31 +946,48 @@ export default function App() {
                   </AnimatePresence>
 
                   {/* Clickable Elements Overlay */}
-                  {showElements && browserInfo.accessibilityTree && (
+                  {showElements && (
                     <div className="absolute inset-0 pointer-events-none z-40">
                       {(() => {
                         const elements: any[] = [];
+                        // Walk main frame tree
                         const flatten = (node: any) => {
+                          if (!node) return;
                           if (node.w > 0 && node.h > 0) {
                             const isClickable = ['button', 'a', 'input', 'textarea', 'select'].includes(node.tag) || node.role === 'button' || node.role === 'link' || node.index;
-                            if (isClickable) elements.push(node);
+                            if (isClickable) elements.push({ ...node, fromIframe: false });
                           }
                           if (node.children) node.children.forEach(flatten);
                         };
-                        flatten(browserInfo.accessibilityTree);
-                        return elements.map((el, i) => (
-                          <div 
-                            key={i}
-                            className="absolute border border-emerald-500/30 bg-emerald-500/5 flex items-center justify-center"
-                            style={{ left: el.x, top: el.y, width: el.w, height: el.h }}
-                          >
-                            {el.index && (
-                              <div className="bg-emerald-500 text-black text-[10px] font-black px-1 rounded-sm shadow-lg">
-                                {el.index}
+                        if (browserInfo.accessibilityTree) flatten(browserInfo.accessibilityTree);
+                        // Add same-origin iframe elements
+                        if (stateRef.current.iframeElements?.length > 0) {
+                          stateRef.current.iframeElements.forEach((el: any) => elements.push({ ...el, fromIframe: true }));
+                        }
+                        // Show iframe bounding boxes as overlay hints
+                        const iframes = stateRef.current.iframeInfo || [];
+                        return (
+                          <>
+                            {iframes.map((fr: any, i: number) => (
+                              <div key={`fr-${i}`} className="absolute border-2 border-blue-400/50 bg-blue-400/5 pointer-events-none" style={{ left: fr.x, top: fr.y, width: fr.w, height: fr.h }}>
+                                <div className="bg-blue-500 text-white text-[9px] font-bold px-1 rounded-sm absolute top-0 left-0">iframe</div>
                               </div>
-                            )}
-                          </div>
-                        ));
+                            ))}
+                            {elements.map((el, i) => (
+                              <div 
+                                key={i}
+                                className={`absolute flex items-center justify-center ${el.fromIframe ? 'border border-blue-400/50 bg-blue-400/10' : 'border border-emerald-500/30 bg-emerald-500/5'}`}
+                                style={{ left: el.x, top: el.y, width: el.w, height: el.h }}
+                              >
+                                {el.index && (
+                                  <div className="bg-emerald-500 text-black text-[10px] font-black px-1 rounded-sm shadow-lg">
+                                    {el.index}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </>
+                        );
                       })()}
                     </div>
                   )}

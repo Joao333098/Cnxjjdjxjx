@@ -485,67 +485,44 @@ async function capturePageState(page: Page) {
       if (children.length > 0) info.children = children;
       return info;
     };
-    const tree = walk(document.body);
-
-    // Also collect info about iframes — elements inside cross-origin iframes are not
-    // accessible via JS, but we can at least report where the iframes are so the AI
-    // knows to use typeAt with visual coordinates.
-    const iframeInfos = Array.from(document.querySelectorAll('iframe')).map(iframe => {
-      const r = iframe.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) return null;
-      return {
-        tag: 'iframe',
-        src: iframe.src || iframe.getAttribute('data-src') || '',
-        name: iframe.name || iframe.id || '',
-        x: Math.round(r.x), y: Math.round(r.y),
-        w: Math.round(r.width), h: Math.round(r.height),
-        note: 'Cross-origin iframe — inputs inside are NOT listed below. Use typeAt(x, y) based on visual coordinates from the screenshot to interact with fields inside this iframe.'
-      };
-    }).filter(Boolean);
-
-    return { tree, iframes: iframeInfos };
+    return walk(document.body);
   })()`);
-
-    if (typeof accessibilityTree === 'object' && accessibilityTree !== null && 'tree' in (accessibilityTree as any)) {
-      const { tree, iframes } = accessibilityTree as any;
-      accessibilityTree = iframes.length > 0 ? { mainFrame: tree, iframes } : tree;
-    }
   } catch (e) {
     console.error("Failed to evaluate accessibility tree:", e);
   }
 
-  // Also try to get accessible (same-origin) iframe element trees
+  // Collect iframe positions so the AI knows where cross-origin iframes are
+  let iframeInfo: any[] = [];
   try {
-    const iframeElements = await page.frames();
-    const iframeData: any[] = [];
-    for (const frame of iframeElements) {
+    iframeInfo = await page.evaluate(`(() => {
+      return Array.from(document.querySelectorAll('iframe')).map(iframe => {
+        const r = iframe.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return null;
+        return { src: iframe.src || '', name: iframe.name || iframe.id || '', x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      }).filter(Boolean);
+    })()`);
+  } catch (_) {}
+
+  // For same-origin iframes, try to get their interactive elements with absolute coords
+  const iframeElements: any[] = [];
+  try {
+    for (const frame of page.frames()) {
       if (frame === page.mainFrame()) continue;
       try {
         const frameEl = await frame.frameElement();
         if (!frameEl) continue;
         const box = await frameEl.boundingBox();
         if (!box || box.width === 0) continue;
-        // Attempt to get elements — will fail silently for cross-origin
-        const subtree = await frame.evaluate(`(() => {
-          const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, button, select, [role="button"]'));
-          return inputs.map(el => {
+        const els = await (frame as any).evaluate(`(() => {
+          return Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, button, select')).map(el => {
             const r = el.getBoundingClientRect();
             return { tag: el.tagName.toLowerCase(), type: el.type || undefined, placeholder: el.placeholder || undefined, value: el.value || undefined, ariaLabel: el.getAttribute('aria-label') || undefined, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
           }).filter(e => e.w > 0 && e.h > 0);
         })()`).catch(() => null);
-        if (subtree && Array.isArray(subtree) && subtree.length > 0) {
-          // Translate frame-relative coords to page-level coords
-          const translated = (subtree as any[]).map(e => ({ ...e, x: Math.round(e.x + box.x), y: Math.round(e.y + box.y), inIframe: true }));
-          iframeData.push({ frameUrl: frame.url(), frameOffset: { x: Math.round(box.x), y: Math.round(box.y) }, elements: translated });
+        if (els && Array.isArray(els) && els.length > 0) {
+          iframeElements.push(...(els as any[]).map((e: any) => ({ ...e, x: Math.round(e.x + box.x), y: Math.round(e.y + box.y), inIframe: true, frameUrl: frame.url() })));
         }
       } catch (_) {}
-    }
-    if (iframeData.length > 0) {
-      if (typeof accessibilityTree === 'object' && 'iframes' in (accessibilityTree as any)) {
-        (accessibilityTree as any).sameOriginIframeElements = iframeData;
-      } else {
-        accessibilityTree = { mainFrame: accessibilityTree, sameOriginIframeElements: iframeData };
-      }
     }
   } catch (_) {}
 
@@ -554,6 +531,8 @@ async function capturePageState(page: Page) {
     url,
     title,
     accessibilityTree,
+    iframeInfo,
+    iframeElements,
   };
 }
 
