@@ -681,11 +681,25 @@ async function executeAction(page: Page, action: string, params: any) {
         const typeAtY = Math.max(0, params.y);
         let taTyped = false;
 
+        // Helper: focus element at coords inside a frame and return whether it worked
+        const focusAndVerify = async (frame: any, fX: number, fY: number): Promise<boolean> => {
+          return frame.evaluate(([x, y]: [number, number]) => {
+            const el = document.elementFromPoint(x, y) as HTMLElement | null;
+            if (!el) return false;
+            const target = (el.closest('input, textarea, [contenteditable="true"]') || el) as HTMLInputElement;
+            if (!target) return false;
+            const tag = target.tagName;
+            if (!['INPUT', 'TEXTAREA'].includes(tag) && target.contentEditable !== 'true') return false;
+            target.focus();
+            target.click();
+            return document.activeElement === target || target.matches(':focus');
+          }, [fX, fY] as [number, number]);
+        };
+
         // Strategy 1: Search all frames for an input at the given viewport coordinates
         const allFrames = [page, ...page.frames()];
         for (const frame of allFrames) {
           try {
-            // For iframes, translate viewport coords to frame-relative coords
             let fX = typeAtX, fY = typeAtY;
             if (frame !== (page as any)) {
               const frameEl = await (frame as any).frameElement();
@@ -697,44 +711,86 @@ async function executeAction(page: Page, action: string, params: any) {
               if (fX < 0 || fY < 0 || fX > box.width || fY > box.height) continue;
             }
 
-            // Find input/textarea at these coordinates inside this frame
-            const found = await frame.evaluate(([x, y]: [number, number]) => {
-              const el = document.elementFromPoint(x, y) as HTMLElement | null;
-              if (!el) return false;
-              const target = (el.closest('input, textarea, [contenteditable="true"]') || el) as HTMLInputElement;
-              if (!target) return false;
-              const tag = target.tagName;
-              if (!['INPUT', 'TEXTAREA'].includes(tag) && target.contentEditable !== 'true') return false;
-              // Focus + clear
-              target.focus();
-              if ('value' in target) (target as HTMLInputElement).value = '';
-              return true;
-            }, [fX, fY] as [number, number]);
-
-            if (found) {
+            const focused = await focusAndVerify(frame, fX, fY);
+            if (focused) {
               await page.waitForTimeout(150);
-              await frame.evaluate(([x, y]: [number, number]) => {
-                const el = document.elementFromPoint(x, y) as HTMLInputElement | null;
-                if (el) { el.focus(); el.click(); }
+              // Re-verify focus is still there before typing
+              const stillFocused = await frame.evaluate(([x, y]: [number, number]) => {
+                const el = document.elementFromPoint(x, y) as HTMLElement | null;
+                if (!el) return false;
+                if (document.activeElement !== el) { (el as HTMLElement).focus(); }
+                return true;
               }, [fX, fY] as [number, number]);
-              await page.waitForTimeout(150);
-              await page.keyboard.type(params.text || '', { delay: 45 });
-              taTyped = true;
-              break;
+              if (stillFocused) {
+                await page.waitForTimeout(100);
+                await page.keyboard.type(params.text || '', { delay: 50 });
+                taTyped = true;
+                break;
+              }
             }
           } catch (_) { /* try next frame */ }
         }
 
-        // Strategy 2: Plain mouse click + keyboard type (works for simple pages)
+        // Strategy 2: Single mouse click + JS focus verification + keyboard type
         if (!taTyped) {
           await page.mouse.move(typeAtX, typeAtY);
           await page.waitForTimeout(100);
           await page.mouse.click(typeAtX, typeAtY);
-          await page.waitForTimeout(350);
-          await page.mouse.click(typeAtX, typeAtY);
-          await page.waitForTimeout(200);
-          await page.keyboard.type(params.text || '', { delay: 45 });
+          await page.waitForTimeout(300);
+
+          // Verify focus landed on an input; re-focus if it drifted
+          await page.evaluate(`(function(x, y) {
+            var sel = 'input, textarea, [contenteditable="true"]';
+            var el = document.elementFromPoint(x, y);
+            if (!el) return;
+            var target = el.closest(sel) || el;
+            if (target && document.activeElement !== target) {
+              target.focus();
+            }
+          })(${typeAtX}, ${typeAtY})`);
+
+          await page.waitForTimeout(150);
+          await page.keyboard.type(params.text || '', { delay: 50 });
           taTyped = true;
+        }
+
+        // Strategy 3: JS direct value injection fallback (if keyboard typing didn't land)
+        await page.waitForTimeout(200);
+        const earlySnip = (params.text || '').substring(0, Math.min(3, (params.text || '').length));
+        if (earlySnip.length > 0) {
+          let landed = false;
+          for (const f of [page, ...page.frames()]) {
+            try {
+              const val = await f.evaluate((s: string) => {
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, [contenteditable="true"]'));
+                return inputs.some((el: any) => (el.value || el.innerText || '').includes(s));
+              }, earlySnip);
+              if (val) { landed = true; break; }
+            } catch (_) {}
+          }
+
+          if (!landed) {
+            // Text didn't land — inject value directly via JS as last resort
+            for (const f of [page, ...page.frames()]) {
+              try {
+                const injected = await f.evaluate(([x, y, text]: [number, number, string]) => {
+                  const el = document.elementFromPoint(x, y) as HTMLInputElement | null;
+                  if (!el) return false;
+                  const target = (el.closest('input, textarea, [contenteditable="true"]') || el) as HTMLInputElement;
+                  if (!target) return false;
+                  target.focus();
+                  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                  if (nativeSetter) nativeSetter.call(target, text);
+                  else target.value = text;
+                  target.dispatchEvent(new Event('input', { bubbles: true }));
+                  target.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }, [typeAtX, typeAtY, params.text || ''] as [number, number, string]);
+                if (injected) break;
+              } catch (_) {}
+            }
+          }
         }
 
         if (params.pressEnter) await page.keyboard.press('Enter');
