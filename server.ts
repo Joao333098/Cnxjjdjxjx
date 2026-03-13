@@ -99,16 +99,9 @@ async function startServer() {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
-        // Attach HMR WebSocket to the existing HTTP server (port 5000)
-        // so Replit's proxy doesn't need to expose a separate port (24678)
-        hmr: { server },
+        hmr: false,
       },
-      watch: {
-        ignored: (filePath: string) =>
-          filePath.includes('/.local/') ||
-          filePath.includes('/node_modules/') ||
-          filePath.includes('/.git/'),
-      },
+      watch: null,
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -354,16 +347,19 @@ async function startServer() {
   });
 
   // Graceful shutdown — releases the port cleanly when Replit restarts the workflow
-  const shutdown = async (signal: string) => {
+  const shutdown = (signal: string) => {
     console.log(`${signal} received, shutting down...`);
+    // Close Socket.IO first so WebSocket connections release immediately
+    io.disconnectSockets(true);
+    io.close();
     server.close(() => process.exit(0));
-    // Force-exit after 3s if connections are keeping it alive
-    setTimeout(() => process.exit(0), 3000).unref();
+    // Force-exit after 1s in case something is still hanging
+    setTimeout(() => process.exit(0), 1000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT',  () => shutdown('SIGINT'));
 
-  // Try to bind to the port, retrying a few times to let a previous instance finish
+  // Try to bind to the port, retrying a few times to let a previous instance exit
   const tryListen = (retriesLeft: number) => {
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
@@ -371,8 +367,8 @@ async function startServer() {
 
     server.once('error', async (err: any) => {
       if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-        console.log(`Port ${PORT} busy, retrying in 2s... (${retriesLeft} attempts left)`);
-        await new Promise(r => setTimeout(r, 2000));
+        console.log(`Port ${PORT} busy, retrying in 1s... (${retriesLeft} left)`);
+        await new Promise(r => setTimeout(r, 1000));
         tryListen(retriesLeft - 1);
       } else {
         console.error(`Could not bind to port ${PORT}:`, err.message);
@@ -381,7 +377,7 @@ async function startServer() {
     });
   };
 
-  tryListen(5);
+  tryListen(10);
 }
 
 async function capturePageState(page: Page) {
