@@ -23,7 +23,7 @@ const io = new Server(server, {
   },
 });
 
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || "5000", 10);
 
 // AI Setup removed from backend - Gemini must be called from frontend
 
@@ -77,7 +77,14 @@ async function startServer() {
   // Vite middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        host: '0.0.0.0',
+        allowedHosts: true,
+      },
+      watch: {
+        ignored: ['**/.local/**', '**/node_modules/**'],
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
