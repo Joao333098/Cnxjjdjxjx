@@ -1,0 +1,65 @@
+Esse erro "Upgrade Required" (HTTP 426) é muito comum quando você coloca uma aplicação que usa WebSockets (como é o caso deste projeto, que usa socket.io) atrás de um domínio próprio usando um proxy reverso (como Nginx, Apache, Cloudflare, etc.).
+
+O que acontece é que o cliente tenta "atualizar" (upgrade) a conexão HTTP padrão para uma conexão WebSocket contínua, mas o seu servidor proxy não está configurado para repassar esses cabeçalhos de atualização para o servidor Node.js.
+
+Para corrigir isso, você precisa ajustar a configuração do servidor que está gerenciando o seu domínio. Aqui estão as soluções para os serviços mais comuns:
+
+1. Se você usa NGINX (Mais comum)
+Você precisa adicionar os cabeçalhos Upgrade e Connection no bloco location da configuração do seu domínio (geralmente em /etc/nginx/sites-available/seu-dominio).
+
+code
+Nginx
+server {
+    listen 80;
+    server_name seu-dominio.com;
+
+    location / {
+        proxy_pass http://localhost:3000; # A porta que a aplicação roda
+        proxy_http_version 1.1;
+        
+        # Estas 3 linhas são as que corrigem o erro "Upgrade Required":
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+    }
+}
+Após alterar, reinicie o Nginx: sudo systemctl restart nginx
+
+2. Se você usa Cloudflare
+Se o seu domínio passa pelo Cloudflare, eles geralmente suportam WebSockets por padrão, mas pode estar desativado na sua conta.
+
+Acesse o painel do Cloudflare.
+
+Vá na aba Network (Rede).
+
+Role a página para baixo e certifique-se de que a opção WebSockets está Ativada (On).
+
+3. Se você usa Apache
+Se estiver usando Apache como proxy reverso, você precisa habilitar o módulo de túnel WebSocket e configurar o proxy.
+Primeiro, habilite os módulos:
+
+code
+Bash
+sudo a2enmod proxy
+sudo a2enmod proxy_http
+sudo a2enmod proxy_wstunnel
+Depois, na configuração do seu VirtualHost:
+
+code
+Apache
+<VirtualHost *:80>
+    ServerName seu-dominio.com
+
+    # Configuração para o WebSocket (Socket.io)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*)           ws://localhost:3000/$1 [P,L]
+    RewriteCond %{HTTP:Upgrade} !=websocket [NC]
+    RewriteRule /(.*)           http://localhost:3000/$1 [P,L]
+
+    ProxyPass / http://localhost:3000/
+    ProxyPassReverse / http://localhost:3000/
+</VirtualHost>
+Após alterar, reinicie o Apache: sudo systemctl restart apache2
+
+Resumo: O seu código aqui no AI Studio está correto. O problema está exclusivamente na infraestrutura/servidor onde o seu domínio está hospedado, que está bloqueando a comunicação em tempo real (WebSockets). Ajustando as configurações acima no seu servidor, o erro desaparecerá.
