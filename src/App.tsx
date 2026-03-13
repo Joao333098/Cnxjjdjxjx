@@ -59,6 +59,9 @@ export default function App() {
   const [showFullConsole, setShowFullConsole] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'console'>('chat');
   const [lastHtml, setLastHtml] = useState<string | null>(null);
+  const [waitingForUserInput, setWaitingForUserInput] = useState(false);
+  const [captchaPendingCoords, setCaptchaPendingCoords] = useState<{x: number, y: number} | null>(null);
+  const [captchaMessage, setCaptchaMessage] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
@@ -197,17 +200,16 @@ export default function App() {
       - If you see a "Create account" button on a login page, IGNORE it. Your job is to LOG IN, not create an account.
       - Before clicking any button, ask yourself: "Did the user ask me to do this?" If no, skip it.
 
-      RULE 2 - CAPTCHA FIELD IDENTIFICATION (MOST IMPORTANT):
+      RULE 2 - CAPTCHA HANDLING (MOST IMPORTANT):
       - When you see a CAPTCHA image on screen, you MUST follow this EXACT procedure:
-        STEP A: Look at the accessibility tree. Find ALL input fields. Check which ones have content already (like email already filled).
-        STEP B: The CAPTCHA input is the one that is EMPTY and positioned after/below the CAPTCHA image. It has placeholder like "Type the text you hear or see" or aria-label containing "captcha".
-        STEP C: NEVER type the CAPTCHA text into a field that already has value/content.
-        STEP D: To type into the CAPTCHA field, try these methods IN ORDER until one works:
-          1. BEST: typeBySelector(selector='input[placeholder*="hear or see"],input[aria-label*="captcha" i],input[jsname="whsOnd"],input[name="ca"]', text=<captcha_text>)
-          2. GOOD: find(placeholder="Type the text you hear or see", action="type", value="<captcha_text>")
-          3. FALLBACK: If the CAPTCHA field has an index in the accessibility tree with value="" (empty) that is DIFFERENT from the email field index, use type(index=<captcha_index>, text=<captcha_text>).
-          4. LAST RESORT: typeAt(x=<center_x_of_captcha_field>, y=<center_y>, text=<captcha_text>) using visual coordinates from the screenshot.
-        STEP E: After typing CAPTCHA, click the "Next" button (NOT "Create account").
+        STEP A: Look at the screenshot carefully. Identify the CAPTCHA input box visually — it's an empty text field near the CAPTCHA image.
+        STEP B: Identify the CENTER X and CENTER Y pixel coordinates of that CAPTCHA input field from the screenshot.
+        STEP C: ALWAYS call waitForUser to ask the human to read and type the CAPTCHA text. This is the ONLY reliable method.
+          waitForUser(message="Please type the CAPTCHA text you see in the image:", x=<center_x_of_input>, y=<center_y_of_input>)
+        STEP D: The human will type the CAPTCHA text and the system will automatically type it at those coordinates.
+        STEP E: After the human types, click "Next" or "Submit" to proceed.
+        - NEVER attempt typeBySelector for CAPTCHA fields — they are often in iframes or shadow DOM and the selector fails.
+        - NEVER try to guess or fabricate CAPTCHA text — always call waitForUser.
 
       RULE 4 - AUTO-RECOVERY FROM WRONG ACTIONS:
       - After EVERY action, compare the new page state to what you expected.
@@ -243,7 +245,7 @@ export default function App() {
       INSTRUCTIONS:
       1. Look at the screenshot carefully. Identify what is ALREADY done vs what still needs to be done.
       2. Check if any button you're about to click is outside the scope of the user goal. If yes, skip it.
-      3. If a CAPTCHA is visible, run getHtml() first before typing anything.
+      3. If a CAPTCHA is visible, call waitForUser() with the coordinates of the CAPTCHA input box — do NOT attempt typeBySelector.
       4. Choose the BEST tool and provide a brief PLAN (next 3-5 steps).
       
       TOOLS:
@@ -254,7 +256,8 @@ export default function App() {
       - clickBySelector(selector: string)
       - type(index: number, text: string, clear?: boolean, pressEnter?: boolean)
       - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
-      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // Best for forms & CAPTCHA. Selector supports comma lists. RULES: for password fields ALWAYS use 'input[type="password"]'. For email fields use 'input[type="email"]'. For CAPTCHA: 'input[placeholder*="hear or see"],input[aria-label*="captcha" i],input[jsname="whsOnd"],input[name="ca"]'. NEVER use input[name="password"] — it often doesn't exist.
+      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // Best for forms. Selector supports comma lists. RULES: for password fields ALWAYS use 'input[type="password"]'. For email fields use 'input[type="email"]'. NEVER use for CAPTCHA.
+      - waitForUser(message: string, x?: number, y?: number) // PAUSE and ask the human to type something (e.g., CAPTCHA text). The human's reply is automatically typed at (x, y) on the page. Always use this for CAPTCHAs.
       - fill(selector: string, text: string, index?: number)
       - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string)
       - scroll(direction: "up" | "down", amount: number)
@@ -350,6 +353,21 @@ export default function App() {
         setIsProcessing(false);
         lastActionRef.current = null;
         setLastClick(null);
+      } else if (result.action === 'waitForUser') {
+        setIsThinking(false);
+        setIsLocked(false);
+        const msg = result.params?.message || 'Please type the CAPTCHA text you see in the image:';
+        const px = result.params?.x;
+        const py = result.params?.y;
+        setCaptchaMessage(msg);
+        setCaptchaPendingCoords(px !== undefined && py !== undefined ? { x: px, y: py } : null);
+        setWaitingForUserInput(true);
+        setStatus('Waiting for your input...');
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'agent',
+          content: `CAPTCHA: ${msg}`,
+        }]);
       } else {
         setStatus(`Executing ${result.action}...`);
         setIsThinking(false);
@@ -389,6 +407,32 @@ export default function App() {
 
   const handleStart = () => {
     if (!prompt.trim() || !socket) return;
+
+    // CAPTCHA reply flow: user is answering a waitForUser request
+    if (waitingForUserInput) {
+      const captchaText = prompt.trim();
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: captchaText }]);
+      setPrompt('');
+      setWaitingForUserInput(false);
+      setCaptchaMessage('');
+
+      if (captchaPendingCoords) {
+        const coords = captchaPendingCoords;
+        setCaptchaPendingCoords(null);
+        setStatus('Typing CAPTCHA...');
+        socket.emit('execute-action', {
+          action: 'typeAt',
+          params: { x: coords.x, y: coords.y, text: captchaText, pressEnter: false }
+        });
+        // Agent loop resumes on action-completed
+      } else {
+        // No coords — just inject the text as context and continue
+        setCaptchaPendingCoords(null);
+        lastActionRef.current = { action: 'waitForUser-reply', params: { text: captchaText } };
+        setTimeout(runAgentStep, 500);
+      }
+      return;
+    }
     
     setIsProcessing(true);
     isProcessingRef.current = true;
@@ -1032,9 +1076,22 @@ export default function App() {
                         <div className={`max-w-[90%] p-4 rounded-2xl shadow-lg ${
                           msg.role === 'user' 
                             ? 'bg-emerald-500 text-black font-semibold' 
-                            : 'bg-[#1a1a1a] border border-white/10'
+                            : msg.content?.startsWith('CAPTCHA:')
+                              ? 'bg-yellow-500/10 border border-yellow-500/40'
+                              : 'bg-[#1a1a1a] border border-white/10'
                         }`}>
-                          {msg.content && <p className="text-sm leading-relaxed">{msg.content}</p>}
+                          {msg.content?.startsWith('CAPTCHA:') ? (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                                <span className="text-[10px] font-black uppercase tracking-widest text-yellow-400">CAPTCHA Required</span>
+                              </div>
+                              <p className="text-sm leading-relaxed text-yellow-100">{msg.content.replace('CAPTCHA: ', '')}</p>
+                              <p className="text-[11px] text-yellow-500/70">Type the CAPTCHA text in the input box below and press Send.</p>
+                            </div>
+                          ) : msg.content ? (
+                            <p className="text-sm leading-relaxed">{msg.content}</p>
+                          ) : null}
                           {msg.thought && (
                             <div className="space-y-3">
                               <div className="flex items-center justify-between">
@@ -1114,20 +1171,26 @@ export default function App() {
 
             {/* Input Area */}
             <div className="p-4 border-t border-white/10 bg-black/20">
+              {waitingForUserInput && (
+                <div className="mb-2 px-3 py-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse flex-shrink-0" />
+                  <span className="text-[11px] text-yellow-300 font-bold uppercase tracking-widest">CAPTCHA — type what you see below</span>
+                </div>
+              )}
               <div className="relative">
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleStart())}
-                  placeholder="Describe what the agent should do..."
-                  className="w-full bg-white/5 border border-white/10 rounded-xl p-4 pr-12 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors resize-none h-24"
+                  placeholder={waitingForUserInput ? (captchaMessage || 'Type the CAPTCHA text you see...') : 'Describe what the agent should do...'}
+                  className={`w-full bg-white/5 border rounded-xl p-4 pr-12 text-sm focus:outline-none transition-colors resize-none h-24 ${waitingForUserInput ? 'border-yellow-500/50 focus:border-yellow-400' : 'border-white/10 focus:border-emerald-500/50'}`}
                 />
                 <button
                   onClick={handleStart}
-                  disabled={isProcessing || !prompt.trim()}
-                  className="absolute bottom-3 right-3 p-2 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  disabled={(!waitingForUserInput && isProcessing) || !prompt.trim()}
+                  className={`absolute bottom-3 right-3 p-2 rounded-lg text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${waitingForUserInput ? 'bg-yellow-400 hover:bg-yellow-300' : 'bg-emerald-500 hover:bg-emerald-400'}`}
                 >
-                  {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                  {isProcessing && !waitingForUserInput ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
                 </button>
               </div>
             </div>
