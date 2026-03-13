@@ -22,7 +22,7 @@
     "express": "^4.22.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.36.0",
-    "openai": "^6.27.0",
+    "openai": "^6.29.0",
     "playwright-chromium": "^1.58.2",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
