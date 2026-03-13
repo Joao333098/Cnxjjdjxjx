@@ -392,9 +392,12 @@ async function capturePageState(page: Page) {
 
     let elementIndex = 0;
     const walk = (node, depth = 0) => {
-      if (depth > 20) return null; 
+      if (depth > 20) return null;
       const rect = node.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return null;
+      const tag = node.tagName ? node.tagName.toLowerCase() : '';
+      const isInputLike = ['input', 'textarea', 'select', 'button'].includes(tag);
+      // Skip zero-size non-interactive containers, but always keep input-like elements
+      if ((rect.width === 0 || rect.height === 0) && !isInputLike) return null;
 
       const interactive = isInteractive(node);
       const textNode = hasText(node);
@@ -804,6 +807,21 @@ async function executeAction(page: Page, action: string, params: any) {
           await page.keyboard.press("Enter");
         }
         break;
+      case "typeBySelector":
+        if (!params.selector) throw new Error("selector required for typeBySelector");
+        const tbsEl = await page.locator(params.selector).first();
+        await tbsEl.scrollIntoViewIfNeeded();
+        await tbsEl.click({ force: true });
+        await page.waitForTimeout(150);
+        if (params.clear !== false) {
+          await page.keyboard.down('Control');
+          await page.keyboard.press('a');
+          await page.keyboard.up('Control');
+          await page.keyboard.press('Backspace');
+        }
+        await page.keyboard.type(params.text || "", { delay: 40 });
+        if (params.pressEnter) await page.keyboard.press('Enter');
+        return { success: true, selector: params.selector };
       case "fill":
         if (params.selector) {
           await page.fill(params.selector, params.text || "");

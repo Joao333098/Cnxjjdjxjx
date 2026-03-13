@@ -199,14 +199,25 @@ export default function App() {
 
       RULE 2 - CAPTCHA FIELD IDENTIFICATION (MOST IMPORTANT):
       - When you see a CAPTCHA image on screen, you MUST follow this EXACT procedure:
-        STEP A: Call getHtml() FIRST to see ALL input fields and their attributes (name, id, placeholder, aria-label, autocomplete).
-        STEP B: Read every input field carefully. Identify them by their attributes:
-          * Email/username field: has "email", "username", "identifier", "login" in its name/id/placeholder/autocomplete.
-          * CAPTCHA field: has "captcha", "code", "challenge", "verification", "Type the text", "hear or see" in its placeholder or aria-label. It is usually EMPTY and positioned BELOW the CAPTCHA image.
-        STEP C: NEVER type the CAPTCHA text into a field that already has content (like the email field).
-        STEP D: Type the CAPTCHA text ONLY into the field identified as the CAPTCHA field in STEP B.
-        STEP E: Use 'find' with placeholder="Type the text you hear or see" OR use the index of the CAPTCHA field from getHtml.
-        STEP F: If you typed in the wrong field, immediately use type with clear=true to erase it, then type in the correct field.
+        STEP A: Look at the accessibility tree. Find ALL input fields. Check which ones have content already (like email already filled).
+        STEP B: The CAPTCHA input is the one that is EMPTY and positioned after/below the CAPTCHA image. It has placeholder like "Type the text you hear or see" or aria-label containing "captcha".
+        STEP C: NEVER type the CAPTCHA text into a field that already has value/content.
+        STEP D: To type into the CAPTCHA field, try these methods IN ORDER until one works:
+          1. BEST: typeBySelector(selector='input[placeholder*="hear or see"],input[aria-label*="captcha" i],input[jsname="whsOnd"],input[name="ca"]', text=<captcha_text>)
+          2. GOOD: find(placeholder="Type the text you hear or see", action="type", value="<captcha_text>")
+          3. FALLBACK: If the CAPTCHA field has an index in the accessibility tree with value="" (empty) that is DIFFERENT from the email field index, use type(index=<captcha_index>, text=<captcha_text>).
+          4. LAST RESORT: typeAt(x=<center_x_of_captcha_field>, y=<center_y>, text=<captcha_text>) using visual coordinates from the screenshot.
+        STEP E: After typing CAPTCHA, click the "Next" button (NOT "Create account").
+
+      RULE 4 - AUTO-RECOVERY FROM WRONG ACTIONS:
+      - After EVERY action, compare the new page state to what you expected.
+      - If you clicked something and landed on an unexpected page (e.g., a "Create account" page when you wanted to log in):
+        * IMMEDIATELY call goBack() to return to the previous page.
+        * Then explain what went wrong in your thought and choose the correct action.
+      - If you typed in the wrong field (field that already had content changed):
+        * IMMEDIATELY use type(index=<wrong_field_index>, text="", clear=true) to erase it.
+        * Then type in the correct field using a selector or the correct index.
+      - If a popup appeared unexpectedly, use closePopup() then continue.
       
       RULE 3 - FIELD ALREADY FILLED = DO NOT TOUCH IT:
       - If the accessibility tree or screenshot shows a field already has content (e.g., email already typed), DO NOT type in that field again.
@@ -237,6 +248,7 @@ export default function App() {
       - clickBySelector(selector: string)
       - type(index: number, text: string, clear?: boolean, pressEnter?: boolean)
       - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
+      - typeBySelector(selector: string, text: string, clear?: boolean, pressEnter?: boolean) // BEST for CAPTCHA: finds input by CSS selector and types into it. selector supports comma lists e.g. 'input[placeholder*="hear or see"],input[jsname="whsOnd"]'
       - fill(selector: string, text: string, index?: number)
       - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string)
       - scroll(direction: "up" | "down", amount: number)
