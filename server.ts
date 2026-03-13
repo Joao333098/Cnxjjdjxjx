@@ -52,33 +52,18 @@ async function startServer() {
     try {
       const apiKey = process.env.VITE_NOVA_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
-      
+
       const isOpenRouter = apiKey.startsWith('sk-or-');
       const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
       const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-pro-v1';
 
-      const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+      const openai = new OpenAI({ baseURL, apiKey });
 
-      const openai = new OpenAI({
-        baseURL,
-        apiKey,
-        defaultHeaders: {
-          'HTTP-Referer': appUrl,
-          'X-Title': 'AI Browser Agent',
-        }
-      });
-
-      const requestBody: any = {
+      const response = await openai.chat.completions.create({
         model: modelName,
         messages,
         max_tokens: 8192,
-      };
-
-      if (!isOpenRouter) {
-        requestBody.response_format = { type: "json_object" };
-      }
-      
-      const response = await openai.chat.completions.create(requestBody);
+      });
       res.json(response);
     } catch (error: any) {
       console.error("Nova API error:", error);
@@ -95,11 +80,10 @@ async function startServer() {
         allowedHosts: true,
       },
       watch: {
-        ignored: [
-          path.join(process.cwd(), '.local', '**'),
-          path.join(process.cwd(), '.git', '**'),
-          '**/node_modules/**',
-        ],
+        ignored: (filePath: string) =>
+          filePath.includes('/.local/') ||
+          filePath.includes('/node_modules/') ||
+          filePath.includes('/.git/'),
       },
       appType: "spa",
     });
