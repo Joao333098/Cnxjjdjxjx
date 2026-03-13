@@ -189,32 +189,34 @@ export default function App() {
       CONSOLE LOGS (Last 10):
       ${consoleLogs.slice(-10).map(l => `[${l.type}] ${l.text}`).join('\n')}
 
-      HUMAN-LIKE REASONING:
-      - Think like a human user. Look at the visual cues (colors, icons, layout).
-      - PRECISION: When clicking, aim for the EXACT center of the element.
-      - SELECTORS: Use selectors (ID, class) whenever possible for 100% accuracy.
-      - FORMS: If you need to write, use the 'fill' or 'type' tool with a selector.
-      - SEARCH: Use 'find' to locate elements by their semantic role (e.g., 'textbox', 'button').
-      - SELF-CORRECTION: If the last action didn't work (e.g., page didn't change, error in console), EXPLAIN WHY and try a different approach.
-      - If you see a square/icon instead of a name, it might be a button or a link. Use 'getHtml' to inspect it.
-      - Don't just follow the accessibility tree; use the screenshot to understand the visual hierarchy.
-      - INFINITE PROGRESSION: Do not stop until the goal is 100% achieved.
+      ===== CRITICAL RULES (NEVER BREAK THESE) =====
+
+      RULE 1 - ONLY DO WHAT WAS ASKED:
+      - NEVER click "Create account", "Sign up", "Register", or any button that was NOT part of the user goal.
+      - NEVER perform actions beyond the scope of the goal.
+      - If you see a "Create account" button on a login page, IGNORE it. Your job is to LOG IN, not create an account.
+      - Before clicking any button, ask yourself: "Did the user ask me to do this?" If no, skip it.
+
+      RULE 2 - CAPTCHA FIELD IDENTIFICATION (MOST IMPORTANT):
+      - When you see a CAPTCHA image on screen, you MUST follow this EXACT procedure:
+        STEP A: Call getHtml() FIRST to see ALL input fields and their attributes (name, id, placeholder, aria-label, autocomplete).
+        STEP B: Read every input field carefully. Identify them by their attributes:
+          * Email/username field: has "email", "username", "identifier", "login" in its name/id/placeholder/autocomplete.
+          * CAPTCHA field: has "captcha", "code", "challenge", "verification", "Type the text", "hear or see" in its placeholder or aria-label. It is usually EMPTY and positioned BELOW the CAPTCHA image.
+        STEP C: NEVER type the CAPTCHA text into a field that already has content (like the email field).
+        STEP D: Type the CAPTCHA text ONLY into the field identified as the CAPTCHA field in STEP B.
+        STEP E: Use 'find' with placeholder="Type the text you hear or see" OR use the index of the CAPTCHA field from getHtml.
+        STEP F: If you typed in the wrong field, immediately use type with clear=true to erase it, then type in the correct field.
       
-      CAPTCHA HANDLING:
-      - If you encounter a CAPTCHA in an image:
-        1. Read the image and extract the text.
-        2. Find the input field. DO NOT CLICK THE FIRST TEXTBOX YOU SEE.
-        3. Inspect the attributes of all textboxes (name, aria-label, placeholder).
-           - The email field usually has 'email', 'user', or 'login' in its attributes.
-           - The CAPTCHA field usually has 'captcha', 'code', 'type the text', or similar in its attributes.
-        4. IF THE FIELD HAS AN INDEX: Use the 'type' tool with that index.
-        5. IF THE FIELD HAS NO INDEX (MISSING TAG):
-           - Strategy A (Coordinates): Estimate the X and Y coordinates of the center of the input field based on the screenshot, and use the 'type' tool with those coordinates (e.g., {"action": "type", "params": {"x": 450, "y": 320, "text": "abcd"}}).
-           - Strategy B (Tab Navigation): Click a nearby element with an index to focus the area, then use 'pressKey' with 'Tab' to move to the CAPTCHA input.
-        6. Wait 1-2 seconds after typing.
-        7. Click the 'Next' or 'Próxima' button.
-      - If you accidentally fill the wrong field (e.g., email field), use 'type' with 'clear: true' to empty it, then try the correct field again.
-      - If the action fails, explain why and try a different approach (e.g., different selector, different wait time).
+      RULE 3 - FIELD ALREADY FILLED = DO NOT TOUCH IT:
+      - If the accessibility tree or screenshot shows a field already has content (e.g., email already typed), DO NOT type in that field again.
+      - Look at the screenshot: fields with text already in them are DONE. Move to the next empty required field.
+
+      ===== GENERAL REASONING =====
+      - Think like a careful human. Look at visual cues, colors, layout.
+      - PRECISION: Use element index whenever available. It is 100% accurate.
+      - SELF-CORRECTION: If last action failed (page unchanged, error in console), explain why and try a completely different approach.
+      - INFINITE PROGRESSION: Do not stop until the goal is 100% achieved.
       
       Current Context:
       - URL: ${url}
@@ -222,30 +224,31 @@ export default function App() {
       - Viewport: Desktop (1280x800)
       
       INSTRUCTIONS:
-      1. Analyze the provided screenshot, console logs, and accessibility tree.
-      2. Choose the BEST tool for the next immediate action.
-      3. SUPER FAST CLICKS: ALWAYS use the 'index' parameter in click/type tools whenever possible. This skips mouse movement and clicks instantly. Interactive elements in the accessibility tree have a unique 'index'.
-      4. Provide a brief PLAN (next 3-5 steps) to show you are thinking ahead.
+      1. Look at the screenshot carefully. Identify what is ALREADY done vs what still needs to be done.
+      2. Check if any button you're about to click is outside the scope of the user goal. If yes, skip it.
+      3. If a CAPTCHA is visible, run getHtml() first before typing anything.
+      4. Choose the BEST tool and provide a brief PLAN (next 3-5 steps).
       
       TOOLS:
       - navigate(url: string)
-      - click(index: number) // FASTEST: Click an element by its index from the accessibility tree. ALWAYS PREFER THIS.
-      - clickAt(x: number, y: number) // Click by coordinates ONLY if the element has no index.
-      - clickByText(text: string) // BEST for buttons and links with clear text.
-      - clickBySelector(selector: string) // BEST for specific elements with ID or unique class.
-      - type(index: number, text: string, clear?: boolean, pressEnter?: boolean) // FASTEST: Type into an element by its index. ALWAYS PREFER THIS.
-      - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean) // Type by coordinates ONLY if no index.
-      - fill(selector: string, text: string, index?: number) // Clear and fill an input.
-      - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string) // Semantic search.
+      - click(index: number)
+      - clickAt(x: number, y: number)
+      - clickByText(text: string)
+      - clickBySelector(selector: string)
+      - type(index: number, text: string, clear?: boolean, pressEnter?: boolean)
+      - typeAt(x: number, y: number, text: string, clear?: boolean, pressEnter?: boolean)
+      - fill(selector: string, text: string, index?: number)
+      - find(role?: string, text?: string, label?: string, placeholder?: string, action?: "click" | "fill" | "type", value?: string, name?: string)
       - scroll(direction: "up" | "down", amount: number)
-      - wait(ms: number) // Use this if you know a page is loading.
-      - waitForSelector(selector: string) // Use this to wait for a specific element to appear.
+      - wait(ms: number)
+      - waitForSelector(selector: string)
       - goBack(), reload()
-      - bypassVideo() // Use this if you encounter a video that must be watched.
+      - bypassVideo()
       - closePopup()
-      - hover(x: number, y: number, index?: number) // Hover over an element. PREFER INDEX.
-      - runJs(code: string) // Use this to inject scripts, fix page issues, or modify HTML
-      - getHtml(selector?: string) // Use this to see the raw HTML of a specific element (defaults to body)
+      - hover(x: number, y: number, index?: number)
+      - runJs(code: string)
+      - getHtml(selector?: string)
+      - pressKey(key: string)
       - finish(message: string)
       
       RESPONSE FORMAT (JSON ONLY):
@@ -253,7 +256,7 @@ export default function App() {
       - DO NOT use unescaped newlines in strings.
       - Return ONLY a valid JSON object.
       {
-        "thought": "Reasoning for this step. If last step failed, explain why. Use the console logs and HTML to debug.",
+        "thought": "Step-by-step reasoning. State what fields are already filled. State which field needs action. If CAPTCHA, state what the CAPTCHA image says and which field index/selector is the CAPTCHA input.",
         "plan": ["step 1", "step 2", "step 3", "step 4", "step 5"],
         "action": "tool_name",
         "params": { ... }
