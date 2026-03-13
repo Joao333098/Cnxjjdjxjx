@@ -4,12 +4,21 @@ import { Server } from "socket.io";
 import http from "http";
 import cors from "cors";
 import path from "path";
+import { execSync } from "child_process";
 import { Browser, Page } from "playwright-chromium";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+
+function findSystemChromium(): string | undefined {
+  try {
+    const p = execSync('which chromium || which chromium-browser || which google-chrome', { encoding: 'utf8' }).trim().split('\n')[0].trim();
+    if (p) return p;
+  } catch {}
+  return undefined;
+}
 
 chromium.use(stealth());
 
@@ -39,34 +48,37 @@ async function startServer() {
 
   // API routes
   app.post("/api/nova", async (req, res) => {
-    const { messages, response_format } = req.body;
+    const { messages } = req.body;
     try {
       const apiKey = process.env.VITE_NOVA_API_KEY;
       if (!apiKey) throw new Error("API Key missing");
       
-      // Determine the correct endpoint and model based on the key
-      // Amazon does not provide a direct "api.nova.amazon.com" OpenAI-compatible endpoint.
-      // If using OpenRouter to access Nova:
       const isOpenRouter = apiKey.startsWith('sk-or-');
       const baseURL = isOpenRouter ? 'https://openrouter.ai/api/v1' : 'https://api.nova.amazon.com/v1';
       const modelName = isOpenRouter ? 'amazon/nova-pro-v1' : 'nova-pro-v1';
+
+      const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
 
       const openai = new OpenAI({
         baseURL,
         apiKey,
         defaultHeaders: {
-          'HTTP-Referer': 'https://localhost:3000',
+          'HTTP-Referer': appUrl,
           'X-Title': 'AI Browser Agent',
-          'x-api-key': apiKey // Added for custom API Gateways that require it
         }
       });
-      
-      const response = await openai.chat.completions.create({
+
+      const requestBody: any = {
         model: modelName,
         messages,
-        response_format,
-        max_tokens: 8192
-      });
+        max_tokens: 8192,
+      };
+
+      if (!isOpenRouter) {
+        requestBody.response_format = { type: "json_object" };
+      }
+      
+      const response = await openai.chat.completions.create(requestBody);
       res.json(response);
     } catch (error: any) {
       console.error("Nova API error:", error);
@@ -83,7 +95,11 @@ async function startServer() {
         allowedHosts: true,
       },
       watch: {
-        ignored: ['**/.local/**', '**/node_modules/**'],
+        ignored: [
+          path.join(process.cwd(), '.local', '**'),
+          path.join(process.cwd(), '.git', '**'),
+          '**/node_modules/**',
+        ],
       },
       appType: "spa",
     });
@@ -105,7 +121,8 @@ async function startServer() {
     socket.on("start-task", async () => {
       try {
         if (!browser) {
-          browser = await chromium.launch({ 
+          const systemChromium = findSystemChromium();
+          const launchOptions: any = { 
             headless: true,
             args: [
               '--disable-blink-features=AutomationControlled',
@@ -113,7 +130,12 @@ async function startServer() {
               '--no-sandbox',
               '--disable-setuid-sandbox'
             ]
-          });
+          };
+          if (systemChromium) {
+            launchOptions.executablePath = systemChromium;
+            console.log(`Using system Chromium: ${systemChromium}`);
+          }
+          browser = await chromium.launch(launchOptions);
           browserContext = await browser.newContext({
             viewport: { width: 1280, height: 800 },
             deviceScaleFactor: 1,
