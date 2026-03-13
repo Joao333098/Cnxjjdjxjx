@@ -99,9 +99,16 @@ async function startServer() {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
-        hmr: false,
+        hmr: { server },
       },
-      watch: null,
+      watch: {
+        ignored: [
+          '**/.local/**',
+          '**/.cache/**',
+          '**/.git/**',
+          '**/node_modules/**',
+        ],
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
