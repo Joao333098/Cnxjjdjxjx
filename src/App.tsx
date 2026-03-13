@@ -64,9 +64,10 @@ export default function App() {
   const [waitingForUserInput, setWaitingForUserInput] = useState(false);
   const [captchaPendingCoords, setCaptchaPendingCoords] = useState<{x: number, y: number} | null>(null);
   const [captchaMessage, setCaptchaMessage] = useState('');
-  const [pinnedElements, setPinnedElements] = useState<{index: number, label: string}[]>([]);
+  const [pinnedElements, setPinnedElements] = useState<{x: number, y: number, label: string}[]>([]);
   const [showHintsPanel, setShowHintsPanel] = useState(false);
-  const [pinIndexInput, setPinIndexInput] = useState('');
+  const [isPinMode, setIsPinMode] = useState(false);
+  const [pendingPin, setPendingPin] = useState<{x: number, y: number} | null>(null);
   const [pinLabelInput, setPinLabelInput] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,8 @@ export default function App() {
   const lastActionRef = useRef<any>(null);
   const postCaptchaRef = useRef<string | null>(null);
   const watchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const msgIdRef = useRef(0);
+  const uid = () => `msg-${++msgIdRef.current}`;
 
   useEffect(() => {
     // Backup loop: if we are processing but idle for too long, trigger a step
@@ -126,7 +129,7 @@ export default function App() {
     newSocket.on('agent-error', (data) => {
       setStatus('Error');
       setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
+        id: uid(), 
         role: 'agent', 
         content: `Error: ${data.message}` 
       }]);
@@ -200,13 +203,14 @@ export default function App() {
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
 
       ${pinnedElements.length > 0 ? `
-      ===== ELEMENT PINS (USER-SPECIFIED TARGETS — USE THESE) =====
-      The user has pinned specific element indexes for you to use:
-      ${pinnedElements.map(p => `• Element #${p.index} → ${p.label}`).join('\n      ')}
+      ===== COORDINATE PINS (USER-MARKED TARGETS — ALWAYS USE THESE) =====
+      The user has marked specific locations on the page for you to use:
+      ${pinnedElements.map(p => `• "${p.label}" → x=${Math.round(p.x)}, y=${Math.round(p.y)}`).join('\n      ')}
       
-      When performing any action related to these labels, ALWAYS use the pinned element index.
-      Example: if "CAPTCHA input" is pinned as #7, use type(index=7, text=...) to type in it.
-      These override any guessing — use click(index=N) or type(index=N) for pinned elements.
+      For any action involving a pinned label, use those EXACT coordinates:
+      - To click: clickAt(x=N, y=M)
+      - To type:  typeAt(x=N, y=M, text=...)
+      Do NOT guess or search for these elements — use the pinned coordinates directly.
       =====
       ` : ''}
       
@@ -404,7 +408,7 @@ export default function App() {
       if (result.plan) setCurrentPlan(result.plan);
 
       setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
+        id: uid(), 
         role: 'agent', 
         content: '', 
         thought: result.thought, 
@@ -417,7 +421,7 @@ export default function App() {
       if (result.action === 'finish') {
         setStatus('Ready');
         setIsThinking(false);
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'agent', content: result.params?.message || 'Task complete' }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'agent', content: result.params?.message || 'Task complete' }]);
         isProcessingRef.current = false;
         setIsProcessing(false);
         lastActionRef.current = null;
@@ -433,7 +437,7 @@ export default function App() {
         setWaitingForUserInput(true);
         setStatus('Waiting for your input...');
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: uid(),
           role: 'agent',
           content: `CAPTCHA: ${msg}`,
         }]);
@@ -459,7 +463,7 @@ export default function App() {
       setStatus('Error');
       setIsThinking(false);
       setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
+        id: uid(), 
         role: 'agent', 
         content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` 
       }]);
@@ -480,7 +484,7 @@ export default function App() {
     // CAPTCHA reply flow: user is answering a waitForUser request
     if (waitingForUserInput) {
       const captchaText = prompt.trim();
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: captchaText }]);
+      setMessages(prev => [...prev, { id: uid(), role: 'user', content: captchaText }]);
       setPrompt('');
       setWaitingForUserInput(false);
       setCaptchaMessage('');
@@ -515,7 +519,7 @@ export default function App() {
     setStepCount(0);
     setCurrentPlan([]);
     
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: prompt };
+    const userMsg: Message = { id: uid(), role: 'user', content: prompt };
     setMessages(prev => [...prev, userMsg]);
     
     socket.emit('start-task');
@@ -549,7 +553,7 @@ export default function App() {
       
       // Add as a manual step to the chat
       setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
+        id: uid(), 
         role: 'agent', 
         content: `Manually navigating to ${url}`,
         action: 'navigate'
@@ -564,11 +568,21 @@ export default function App() {
   };
 
   const handleScreenshotClick = (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!socket || isProcessing) return;
+    if (!socket) return;
     
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 1280;
     const y = ((e.clientY - rect.top) / rect.height) * 800;
+
+    // PIN MODE: capture click as a named coordinate pin
+    if (isPinMode) {
+      e.stopPropagation();
+      setPendingPin({ x, y });
+      setPinLabelInput('');
+      return;
+    }
+
+    if (isProcessing) return;
     
     // Check if we clicked an input to trigger the keyboard
     if (browserInfo.accessibilityTree) {
@@ -687,13 +701,13 @@ export default function App() {
               </button>
             </div>
             <button
-              onClick={() => setShowHintsPanel(!showHintsPanel)}
+              onClick={() => { setShowHintsPanel(!showHintsPanel); if (isPinMode) setIsPinMode(false); }}
               title="Element Pins for AI"
-              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors border text-[10px] font-bold uppercase tracking-widest ${pinnedElements.length > 0 ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'hover:bg-white/10 border-white/10 text-zinc-500'}`}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors border text-[10px] font-bold uppercase tracking-widest ${isPinMode ? 'bg-yellow-400 border-yellow-400 text-black' : pinnedElements.length > 0 ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400' : 'hover:bg-white/10 border-white/10 text-zinc-500'}`}
             >
               <Lightbulb className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Hints</span>
-              {pinnedElements.length > 0 && <span className="w-4 h-4 rounded-full bg-yellow-400 text-black text-[9px] font-black flex items-center justify-center">{pinnedElements.length}</span>}
+              <span className="hidden md:inline">{isPinMode ? 'PIN ON' : 'Hints'}</span>
+              {!isPinMode && pinnedElements.length > 0 && <span className="w-4 h-4 rounded-full bg-yellow-400 text-black text-[9px] font-black flex items-center justify-center">{pinnedElements.length}</span>}
             </button>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-zinc-500 uppercase font-bold">Scale</span>
@@ -765,7 +779,7 @@ export default function App() {
                 initial={{ y: -20, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: -20, opacity: 0 }}
-                className="absolute top-4 left-4 right-4 z-50 max-w-md mx-auto"
+                className="absolute top-4 right-4 z-50 w-72"
               >
                 <div className="bg-black/95 backdrop-blur-xl border border-yellow-500/30 rounded-2xl p-4 shadow-[0_0_40px_rgba(234,179,8,0.1)]">
                   <div className="flex items-center justify-between mb-3">
@@ -774,8 +788,8 @@ export default function App() {
                         <Lightbulb className="w-4 h-4 text-yellow-400" />
                       </div>
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Elementos Fixos</p>
-                        <p className="text-[10px] text-zinc-500">A IA vai usar esses índices diretamente</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500">Pins de Coordenadas</p>
+                        <p className="text-[10px] text-zinc-500">A IA usa esses pontos diretamente</p>
                       </div>
                     </div>
                     <button onClick={() => setShowHintsPanel(false)} className="p-1.5 hover:bg-white/10 rounded-lg text-zinc-500">
@@ -783,68 +797,109 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Pin mode toggle */}
+                  <button
+                    onClick={() => { setIsPinMode(!isPinMode); setShowHintsPanel(false); }}
+                    className={`w-full py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest mb-3 transition-all ${isPinMode ? 'bg-yellow-400 text-black' : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/30'}`}
+                  >
+                    {isPinMode ? '● Modo PIN Ativo — clique no browser' : '+ Ativar Modo PIN'}
+                  </button>
+
                   {/* Existing pins list */}
-                  {pinnedElements.length > 0 && (
-                    <div className="space-y-1.5 mb-3">
+                  {pinnedElements.length > 0 ? (
+                    <div className="space-y-1.5">
                       {pinnedElements.map((pin, i) => (
                         <div key={i} className="flex items-center gap-2 bg-yellow-500/5 border border-yellow-500/20 rounded-xl px-3 py-2">
-                          <div className="w-6 h-6 rounded-lg bg-yellow-500 text-black text-[10px] font-black flex items-center justify-center flex-shrink-0">
-                            {pin.index}
+                          <div className="w-5 h-5 rounded-full bg-yellow-400 text-black text-[9px] font-black flex items-center justify-center flex-shrink-0">{i + 1}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] text-zinc-300 truncate">{pin.label}</p>
+                            <p className="text-[9px] text-zinc-600 font-mono">x={Math.round(pin.x)}, y={Math.round(pin.y)}</p>
                           </div>
-                          <span className="flex-1 text-[11px] text-zinc-300">{pin.label}</span>
                           <button
                             onClick={() => setPinnedElements(prev => prev.filter((_, j) => j !== i))}
-                            className="p-1 hover:bg-red-500/20 text-zinc-600 hover:text-red-400 rounded-lg transition-colors"
+                            className="p-1 hover:bg-red-500/20 text-zinc-600 hover:text-red-400 rounded-lg transition-colors flex-shrink-0"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ))}
+                      <button
+                        onClick={() => setPinnedElements([])}
+                        className="w-full py-1.5 text-[10px] text-red-400 hover:text-red-300 uppercase font-bold tracking-widest mt-1"
+                      >
+                        Limpar todos
+                      </button>
                     </div>
-                  )}
-
-                  {/* Add new pin form */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={pinIndexInput}
-                      onChange={(e) => setPinIndexInput(e.target.value)}
-                      placeholder="#"
-                      min="1"
-                      className="w-14 bg-white/5 border border-white/10 rounded-xl px-2 py-2 text-[12px] text-white font-mono outline-none focus:border-yellow-500/50 text-center"
-                    />
-                    <input
-                      type="text"
-                      value={pinLabelInput}
-                      onChange={(e) => setPinLabelInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && pinIndexInput && pinLabelInput.trim()) {
-                          setPinnedElements(prev => [...prev, { index: parseInt(pinIndexInput), label: pinLabelInput.trim() }]);
-                          setPinIndexInput('');
-                          setPinLabelInput('');
-                        }
-                      }}
-                      placeholder="Ex: Campo CAPTCHA, Botão Entrar..."
-                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[11px] text-white outline-none focus:border-yellow-500/50"
-                    />
-                    <button
-                      onClick={() => {
-                        if (!pinIndexInput || !pinLabelInput.trim()) return;
-                        setPinnedElements(prev => [...prev, { index: parseInt(pinIndexInput), label: pinLabelInput.trim() }]);
-                        setPinIndexInput('');
-                        setPinLabelInput('');
-                      }}
-                      className="w-8 h-8 bg-yellow-500 text-black rounded-xl font-black text-lg flex items-center justify-center hover:bg-yellow-400 transition-colors flex-shrink-0"
-                    >
-                      +
-                    </button>
-                  </div>
-
-                  {pinnedElements.length === 0 && (
-                    <p className="text-[10px] text-zinc-600 mt-2 text-center">
-                      Ative Elements, veja o número do elemento no site e adicione aqui
+                  ) : (
+                    <p className="text-[10px] text-zinc-600 text-center py-2">
+                      Ative o modo PIN e clique em qualquer ponto no browser para marcar
                     </p>
                   )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Pin mode border overlay */}
+          {isPinMode && (
+            <div className="absolute inset-0 z-30 pointer-events-none border-4 border-yellow-400/60 rounded-lg">
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full shadow-lg">
+                Modo PIN — clique no ponto que quer marcar
+              </div>
+            </div>
+          )}
+
+          {/* Pending pin dialog */}
+          <AnimatePresence>
+            {pendingPin && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="absolute inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                onClick={() => setPendingPin(null)}
+              >
+                <div
+                  className="bg-[#111] border border-yellow-500/40 rounded-2xl p-5 w-72 shadow-2xl"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <p className="text-[10px] font-black uppercase tracking-widest text-yellow-500 mb-1">Nome para este ponto</p>
+                  <p className="text-[10px] text-zinc-500 mb-3">x={Math.round(pendingPin.x)}, y={Math.round(pendingPin.y)}</p>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={pinLabelInput}
+                    onChange={e => setPinLabelInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && pinLabelInput.trim()) {
+                        setPinnedElements(prev => [...prev, { x: pendingPin.x, y: pendingPin.y, label: pinLabelInput.trim() }]);
+                        setPendingPin(null);
+                        setPinLabelInput('');
+                      }
+                      if (e.key === 'Escape') { setPendingPin(null); setPinLabelInput(''); }
+                    }}
+                    placeholder="Ex: Campo CAPTCHA, Botão Entrar..."
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[12px] text-white outline-none focus:border-yellow-500/60 mb-3"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        if (!pinLabelInput.trim()) return;
+                        setPinnedElements(prev => [...prev, { x: pendingPin.x, y: pendingPin.y, label: pinLabelInput.trim() }]);
+                        setPendingPin(null);
+                        setPinLabelInput('');
+                      }}
+                      className="flex-1 py-2 bg-yellow-400 text-black text-[11px] font-black uppercase rounded-xl hover:bg-yellow-300 transition-colors"
+                    >
+                      Salvar Pin
+                    </button>
+                    <button
+                      onClick={() => { setPendingPin(null); setPinLabelInput(''); }}
+                      className="py-2 px-3 bg-white/5 text-zinc-500 text-[11px] font-bold rounded-xl hover:bg-white/10 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -1025,7 +1080,7 @@ export default function App() {
                     src={screenshot}
                     alt="Browser Preview"
                     onClick={handleScreenshotClick}
-                    className="w-full h-full object-cover cursor-crosshair"
+                    className={`w-full h-full object-cover ${isPinMode ? 'cursor-cell' : 'cursor-crosshair'}`}
                   />
 
                   {/* Hidden Input to trigger mobile keyboard */}
@@ -1117,6 +1172,22 @@ export default function App() {
                       })()}
                     </div>
                   )}
+
+                  {/* Pin markers overlay */}
+                  {pinnedElements.map((pin, i) => (
+                    <div
+                      key={`pin-${i}`}
+                      className="absolute z-45 pointer-events-none flex flex-col items-center"
+                      style={{ left: pin.x, top: pin.y }}
+                    >
+                      <div className="w-5 h-5 -ml-2.5 -mt-2.5 rounded-full bg-yellow-400 border-2 border-black shadow-lg flex items-center justify-center">
+                        <span className="text-[8px] font-black text-black">{i + 1}</span>
+                      </div>
+                      <div className="mt-1 px-1.5 py-0.5 bg-yellow-400 text-black text-[8px] font-black rounded shadow-lg whitespace-nowrap max-w-[80px] truncate">
+                        {pin.label}
+                      </div>
+                    </div>
+                  ))}
 
                   {/* Last Click/Action Indicator */}
                   {lastClick && (
