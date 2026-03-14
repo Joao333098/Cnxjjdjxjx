@@ -221,6 +221,18 @@ async function startServer() {
           if (coordBasedActions.includes(action) && typeof params?.x === 'number' && typeof params?.y === 'number') {
             socket.emit('cursor-move', { x: params.x, y: params.y });
           }
+          // For index-based click/type, resolve coords and emit cursor-move too
+          if ((action === 'click' || action === 'type') && params?.index !== undefined && activePage) {
+            try {
+              const pos = await activePage.evaluate(`(function(idx) {
+                var el = document.querySelector('[data-agent-index="' + idx + '"]');
+                if (!el) return null;
+                var r = el.getBoundingClientRect();
+                return { x: r.x + r.width/2, y: r.y + r.height/2 };
+              })(${JSON.stringify(params.index)})`);
+              if (pos && typeof pos.x === 'number') socket.emit('cursor-move', pos);
+            } catch(_) {}
+          }
           const result = await executeAction(activePage, action, params);
           
           // Wait for page to settle
@@ -1035,25 +1047,32 @@ async function executeAction(page: Page, action: string, params: any) {
       }
       case "type":
         if (params.index !== undefined) {
+          // Step 1: scroll element into view and get coordinates
           const targetInfo = await page.evaluate(`(function(index) {
             var target = document.querySelector('[data-agent-index="' + index + '"]');
             if (target) {
-              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              target.focus();
-              if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') target.select();
+              target.scrollIntoView({ behavior: 'instant', block: 'center' });
               var rect = target.getBoundingClientRect();
-              return { success: true, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+              return { success: true, x: rect.x + rect.width/2, y: rect.y + rect.height/2, tag: target.tagName.toLowerCase() };
             }
             return { success: false };
           })(${JSON.stringify(params.index)})`);
           if (targetInfo.success) {
+            // Step 2: real Playwright mouse click to focus (same as click(index))
+            await page.mouse.move(targetInfo.x, targetInfo.y);
+            await page.waitForTimeout(80);
+            await page.mouse.click(targetInfo.x, targetInfo.y);
+            await page.waitForTimeout(150);
+            // Step 3: clear existing text if requested
             if (params.clear) {
               await page.keyboard.down('Control');
               await page.keyboard.press('a');
               await page.keyboard.up('Control');
               await page.keyboard.press('Backspace');
+              await page.waitForTimeout(50);
             }
-            await page.keyboard.type(params.text || "", { delay: 50 });
+            // Step 4: type the text
+            await page.keyboard.type(params.text || "", { delay: 40 });
             if (params.pressEnter) {
               await page.waitForTimeout(300);
               await page.keyboard.press("Enter");

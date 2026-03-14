@@ -312,12 +312,31 @@ export default function App() {
       - If you see a masked/dots input → it's the PASSWORD field → type the password (even if the page looks similar to email screen).
       - If you typed email in the LAST step → DO NOT type email again → look for the password field.
 
-      RULE 4 - FIELD TYPING — USE COORDINATES WHEN SELECTORS FAIL:
-      - BEST method for any field: look at the screenshot, identify the field visually, use typeAt(x, y, text) with its CENTER pixel coordinates.
-      - Accessibility tree index: if the field has an index number in the tree, use type(index=N, text=...) — very reliable.
-      - typeBySelector: only use when you are certain of the selector. If the LAST ACTION was a typeBySelector error, switch to typeAt(x, y) immediately.
-      - Password field coords: look at the screenshot for a masked (●●●●) input box and note its center X, Y.
-      - NEVER repeat the same failed typeBySelector call — always switch to a different method.
+      RULE 4 - CLICKING AND TYPING — USE ELEMENT INDEX (PREFERRED):
+      The accessibility tree lists every interactive element with a number. Use that number.
+
+      PRIORITY ORDER for clicking:
+        1st (BEST): click(index=N)         ← use the number from the accessibility tree. Reliable, fast, no guessing.
+        2nd: clickByText(text="...")        ← if you know the exact button/link text.
+        3rd: clickBySelector(selector)     ← if you know a CSS selector.
+        4th (LAST RESORT): clickAt(x, y)   ← ONLY for iframes (Google, reCAPTCHA) where elements don't appear in the tree.
+
+      PRIORITY ORDER for typing:
+        1st (BEST): type(index=N, text="...", pressEnter=true/false)  ← use element index. Clicks to focus, then types.
+        2nd: typeBySelector(selector, text)                           ← if you know the selector.
+        3rd (LAST RESORT): typeAt(x, y, text)                        ← ONLY for cross-origin iframes (Google login, CAPTCHA).
+
+      HOW TO USE THE ACCESSIBILITY TREE:
+      - Read the tree. Find the element you need (button, input, link, etc.).
+      - Note its number (e.g., "14" if the tree shows it as element 14).
+      - Call click(index=14) or type(index=14, text="hello").
+      - DO NOT guess coordinates for elements that appear in the accessibility tree.
+      - Coordinates (clickAt/typeAt) are ONLY for things NOT in the tree (cross-origin iframes).
+
+      EXAMPLES:
+        Tree shows: [12] input placeholder="Email"  → type(index=12, text="user@email.com")
+        Tree shows: [7] button "Sign In"            → click(index=7)
+        Tree shows: [3] a href="/login" "Log in"    → click(index=3)
 
       RULE 5 - AUTO-RECOVERY FROM WRONG ACTIONS:
       - If you clicked something and landed on an unexpected page: call goBack() immediately, then try again.
