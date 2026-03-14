@@ -444,12 +444,30 @@ async function capturePageState(page: Page) {
     accessibilityTree = await page.evaluate(`(() => {
     const isInteractive = (node) => {
       const tag = node.tagName.toLowerCase();
-      const role = node.getAttribute("role");
+      const role = (node.getAttribute("role") || "").toLowerCase();
       const hasClick = node.onclick || node.getAttribute("onclick");
       const isFocusable = node.tabIndex >= 0;
-      return ["button", "a", "input", "textarea", "select", "details", "summary"].includes(tag) || 
-             ["button", "link", "checkbox", "menuitem", "option", "textbox"].includes(role) ||
-             hasClick || isFocusable;
+      const style = window.getComputedStyle(node);
+      const cursorSuggestsClick = style.cursor === 'pointer';
+      const hasControlAttrs = node.hasAttribute('contenteditable') ||
+        node.hasAttribute('aria-checked') ||
+        node.hasAttribute('aria-selected') ||
+        node.hasAttribute('aria-expanded') ||
+        node.hasAttribute('aria-pressed');
+      const semanticRoles = [
+        "button", "link", "checkbox", "menuitem", "option", "textbox",
+        "tab", "radio", "switch", "combobox", "listbox", "menu", "treeitem"
+      ];
+      const semanticTags = [
+        "button", "a", "input", "textarea", "select", "details", "summary", "label"
+      ];
+
+      return semanticTags.includes(tag) ||
+             semanticRoles.includes(role) ||
+             hasClick ||
+             isFocusable ||
+             cursorSuggestsClick ||
+             hasControlAttrs;
     };
 
     const hasText = (node) => {
@@ -461,7 +479,7 @@ async function capturePageState(page: Page) {
       if (depth > 20) return null;
       const rect = node.getBoundingClientRect();
       const tag = node.tagName ? node.tagName.toLowerCase() : '';
-      const isInputLike = ['input', 'textarea', 'select', 'button'].includes(tag);
+      const isInputLike = ['input', 'textarea', 'select', 'button', 'label'].includes(tag);
       // Skip zero-size non-interactive containers, but always keep input-like elements
       if ((rect.width === 0 || rect.height === 0) && !isInputLike) return null;
 
@@ -505,6 +523,10 @@ async function capturePageState(page: Page) {
         info.type = node.type;
       }
 
+      if (node.tagName === "LABEL") {
+        info.for = node.getAttribute('for') || undefined;
+      }
+
       if (children.length > 0) info.children = children;
       return info;
     };
@@ -537,9 +559,21 @@ async function capturePageState(page: Page) {
         const box = await frameEl.boundingBox();
         if (!box || box.width === 0) continue;
         const els = await (frame as any).evaluate(`(() => {
-          return Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, button, select')).map(el => {
+          return Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, button, select, label, [role="button"], [role="option"], [role="radio"], [role="checkbox"], [tabindex]')).map(el => {
             const r = el.getBoundingClientRect();
-            return { tag: el.tagName.toLowerCase(), type: el.type || undefined, placeholder: el.placeholder || undefined, value: el.value || undefined, ariaLabel: el.getAttribute('aria-label') || undefined, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+            return {
+              tag: el.tagName.toLowerCase(),
+              type: el.type || undefined,
+              role: el.getAttribute('role') || undefined,
+              text: (el.innerText || '').slice(0, 80) || undefined,
+              placeholder: el.placeholder || undefined,
+              value: el.value || undefined,
+              ariaLabel: el.getAttribute('aria-label') || undefined,
+              x: Math.round(r.x),
+              y: Math.round(r.y),
+              w: Math.round(r.width),
+              h: Math.round(r.height)
+            };
           }).filter(e => e.w > 0 && e.h > 0);
         })()`).catch(() => null);
         if (els && Array.isArray(els) && els.length > 0) {
