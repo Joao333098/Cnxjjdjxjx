@@ -82,6 +82,12 @@ export default function App() {
   const watchdogRef = useRef<NodeJS.Timeout | null>(null);
   const msgIdRef = useRef(0);
   const uid = () => `msg-${++msgIdRef.current}`;
+  const pinnedElementsRef = useRef<{x: number, y: number, label: string}[]>([]);
+
+  // Keep pinnedElementsRef always current so runAgentStep never reads stale pins
+  useEffect(() => {
+    pinnedElementsRef.current = pinnedElements;
+  }, [pinnedElements]);
 
   useEffect(() => {
     // Backup loop: if we are processing but idle for too long, trigger a step
@@ -207,17 +213,22 @@ export default function App() {
       CURRENT STEP: ${stepCountRef.current}
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
 
-      ${pinnedElements.length > 0 ? `
-      ===== USER PINS — HIGHEST PRIORITY TARGETS =====
-      The user has manually marked these exact spots on the page. When any action matches a pin label, use the pin FIRST — before the accessibility tree and before guessing.
+      ${pinnedElementsRef.current.length > 0 ? `
+      ===== USER PINS — ABSOLUTE PRIORITY (READ THIS FIRST) =====
+      The user pre-marked exact pixel coordinates on the page. These are MORE RELIABLE than your own guesses.
+      They OVERRIDE element index, CSS selectors, AND visual coordinate guessing.
+      Pin labels may be in Portuguese or English — both are valid.
 
-      ${pinnedElements.map((p, i) => `PIN ${i + 1}: "${p.label}" → x=${Math.round(p.x)}, y=${Math.round(p.y)}`).join('\n      ')}
+      ${pinnedElementsRef.current.map((p, i) => `PIN ${i + 1}: label="${p.label}" → clickAt/typeAt x=${Math.round(p.x)}, y=${Math.round(p.y)}`).join('\n      ')}
 
-      Rules for pins:
-      - To CLICK a pin: clickAt(x=..., y=...)   using the exact pin coordinates above
-      - To TYPE into a pin: typeAt(x=..., y=..., text=...)  using the exact pin coordinates above
-      - Pins override the "prefer index" rule — if there is a pin for what you need, use the pin coordinates directly
-      - Example: if PIN 1 is "Email Field" and you need to type an email, call typeAt(x=${Math.round(pinnedElements[0]?.x ?? 0)}, y=${Math.round(pinnedElements[0]?.y ?? 0)}, text="...")
+      Portuguese → English reference: senha=password, email=email, usuario=username, botao=button, entrar=login, proximo=next
+
+      MANDATORY RULES FOR PINS:
+      ⚡ If you need to CLICK something and a pin label matches → clickAt(x=<pin x>, y=<pin y>)
+      ⚡ If you need to TYPE into something and a pin label matches → typeAt(x=<pin x>, y=<pin y>, text=...)
+      ⚡ "senha" pin = password field. ALWAYS use typeAt with the senha pin's coordinates for the password.
+      ⚡ DO NOT compute your own coordinates when a pin exists for the target — use the pin's x,y exactly.
+      ⚡ These rules apply EVEN inside Google iframes. Pin coordinates override the Google iframe rule.
       =====
       ` : ''}
       
@@ -404,6 +415,14 @@ export default function App() {
       - pressKey(key: string)
       - finish(message: string)
       
+      ${pinnedElementsRef.current.length > 0 ? `
+      ⚠️ FINAL CHECK BEFORE YOU RESPOND — USER PINS ARE ACTIVE ⚠️
+      Before writing your action, answer: "Does my next action involve a target that has a user pin?"
+      Active pins: ${pinnedElementsRef.current.map((p, i) => `"${p.label}"(x=${Math.round(p.x)},y=${Math.round(p.y)})`).join(', ')}
+      If YES → you MUST use the pin's exact x,y coordinates. Not your own guess. The pin's coordinates.
+      senha=password field. If typing password → typeAt(x=${Math.round(pinnedElementsRef.current.find(p => p.label.toLowerCase().includes('senha') || p.label.toLowerCase().includes('pass'))?.x ?? 0)}, y=${Math.round(pinnedElementsRef.current.find(p => p.label.toLowerCase().includes('senha') || p.label.toLowerCase().includes('pass'))?.y ?? 0)}, text=<password>)
+      ` : ''}
+
       RESPONSE FORMAT (JSON ONLY):
       - DO NOT use comments (//) in the JSON.
       - DO NOT use unescaped newlines in strings.
