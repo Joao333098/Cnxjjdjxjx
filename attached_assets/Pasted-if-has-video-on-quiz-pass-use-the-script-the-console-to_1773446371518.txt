@@ -1,0 +1,71 @@
+if has video on quiz pass use the script the console to create a skip video Your first goal is to log in to the website at the following link: https://clever.com/oauth/authorize?channel=clever-portal&client_id=f86f5e2de0bb792e695c&confirmed=true&district_id=57bc3fbb349cfd010000081c&redirect_uri=https%3A%2F%2Fsso-middleman.sso-prod.il-apps.com%2FClever%2FClever%2FEdgenuity&response_type=code Use the following credentials to log in: - gmail: 69414@marietta-schools.net - Password: REEF636hulk Once logged in, your next goal is to complete all available history quizzes, practice exercises, and activities. For each question: - If you know the answer, select it. - If you do not know the answer, search for the correct answer online, review the information, and select the best answer based on your understanding. If you encounter a video that must be watched before proceeding, attempt to use the browser console to bypass or skip the video so you can continue with the activities. Your goal is complete when all history quizzes, practices, and activities have been answered correctly and you have reached the end of the assigned tasks or there are no more activities available to complete.
+STEP 1
+ACTIVE
+The current page is blank (about:blank), indicating that no navigation has occurred yet. The goal is to log in to the website at the provided URL using the given credentials. The first step is to navigate to the login page. There are no CAPTCHAs or errors visible, and no previous actions have been taken. The next action should be to navigate to the specified URL to begin the login process.
+
+EXECUTING ACTION
+navigate
+{ "url": "https://clever.com/oauth/authorize?channel=clever-portal&client_id=f86f5e2de0bb792e695c&confirmed=true&district_id=57bc3fbb349cfd010000081c&redirect_uri=https%3A%2F%2Fsso-middleman.sso-prod.il-apps.com%2FClever%2FClever%2FEdgenuity&response_type=code" }
+STEP 2
+ACTIVE
+VERIFICATION FIRST: (1) What did my last action do? I navigated to the Clever login page. (2) Did it succeed? Yes, the page shows the Clever login interface with options to log in with Google or via Clever Badge. (3) If it failed: N/A. (4) What is the next required action? I need to log in using the provided credentials. The page shows a 'Log in with Google' button which is the appropriate method since the credentials are a Gmail and password. (5) Are ALL previous required fields correctly filled before I click Next/Submit? N/A as this is a login button click.
+
+EXECUTING ACTION
+clickBySelector
+{ "selector": "a[href*='oauth/google/login']" }
+STEP 3
+ACTIVE
+VERIFICATION FIRST: The last action was a clickBySelector on 'a[href*='oauth/google/login']'. The screenshot shows a Google login page with an email input field visible but empty. The email field needs to be filled with the provided credentials before proceeding. There's no CAPTCHA visible, so no need to call waitForUser. The email field is inside a Google iframe, so typeAt should be used with the visual coordinates of the email input field.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 284, "text": "69414@marietta-schools.net", "pressEnter": true }
+STEP 4
+ACTIVE
+VERIFICATION FIRST: (1) My last action was to type the email into the email field. (2) Did it succeed? The email field now shows '69414@marietta-schools.net' which matches what I typed, so it succeeded. (3) If it failed: N/A - it succeeded. (4) The next required action is to type the password into the password field. (5) Are ALL previous required fields filled before I click Next/Submit? The email field is filled, but we haven't typed the password yet.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 412, "text": "REEF636hulk", "pressEnter": true }
+STEP 5
+ACTIVE
+VERIFICATION FIRST: The last action was typing the password 'REEF636hulk' into the password field. However, the screenshot shows we are still on the Google login page, not on the Clever portal. The password field is not visible in this screenshot, indicating the password typing action likely failed or was not processed correctly. The current page shows a Google sign-in form with an email field that is empty. The next step is to type the email address into the email field.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 284, "text": "69414@marietta-schools.net", "pressEnter": true }
+STEP 6
+ACTIVE
+VERIFICATION FIRST: (1) What did my last action do? I attempted to type the email address into the email field using coordinates. (2) Did it succeed? The field appears empty in the screenshot, so the action likely failed. (3) If it failed: the issue might be that the coordinates were off or the field wasn't ready. (4) What is the next required action? I need to try typing the email again, this time ensuring the coordinates are precise and the field is ready. (5) Are ALL previous required fields correctly filled before I click Next/Submit? The email field is empty, so it needs to be filled first.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 284, "text": "69414@marietta-schools.net", "pressEnter": false }
+STEP 7
+ACTIVE
+VERIFICATION FIRST: The last action typed the email into the email field on the Google sign-in page. The email field now contains '69414@marietta-schools.net'. The next step is to type the password into the password field which is visible on the page at coordinates (665, 422). After typing the password, I should press Enter to submit the form and proceed to the next page. There are no CAPTCHAs visible, so no need to call waitForUser.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 422, "text": "REEF636hulk", "pressEnter": true }
+STEP 8
+ACTIVE
+VERIFICATION FIRST: (1) What did my last action do? I attempted to type the password 'REEF636hulk' into the password field using typeAt with coordinates (665, 422). (2) Did it succeed? The console logs show a warning about password fields not being contained in a form, but the visual screenshot shows the password field is present and empty. The action may have failed due to the field not being in a form. (3) If it failed: The error suggests the password field is not in a form element, which can cause typing issues. I need to use typeAt again but ensure I'm targeting the correct field coordinates. (4) What is the NEXT required action to make progress toward the goal? I need to correctly enter the password and then proceed to login. (5) Are ALL previous required fields correctly filled before I click Next/Submit? The email field is empty in the screenshot, so I need to enter the email first, then the password, then click Next.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 284, "text": "69414@marietta-schools.net", "pressEnter": true }
+STEP 9
+ACTIVE
+VERIFICATION FIRST: (1) What did my last action do? It typed the email address into the email field. (2) Did it succeed? Yes, the email field now shows '69414@marietta-schools.net'. (3) If it failed: N/A - it succeeded. (4) What is the NEXT required action? The next step is to type the password into the password field. (5) Are ALL previous required fields filled before I click Next/Submit? Yes, the email field is filled.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 343, "text": "REEF636hulk", "pressEnter": true }
+STEP 10
+ACTIVE
+VERIFICATION FIRST: 1. What did my last action do? I typed the password 'REEF636hulk' into the password field. 2. Did it succeed? The screenshot shows the password field is now filled with 'REEF636hulk'. 3. If it failed: what went wrong and what different approach will I use? It succeeded. 4. What is the NEXT required action to make progress toward the goal? I need to submit the login form by pressing Enter or clicking the 'Next' button. 5. Are ALL previous required fields correctly filled before I click Next/Submit? Yes, both the email and password fields are filled.
+
+EXECUTING ACTION
+typeAt
+{ "x": 665, "y": 343, "text": "", "pressEnter": true }

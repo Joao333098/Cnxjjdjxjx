@@ -256,17 +256,33 @@ export default function App() {
       - An empty CAPTCHA field looks like a blank text box near a distorted image or puzzle.
       - ONLY click Next/Submit when the CAPTCHA input box visibly contains text OR when postCaptchaRef confirms the text was just typed.
 
-      RULE 2B - GOOGLE FORMS / OAUTH IFRAMES (CRITICAL):
-      - Google sign-in, Google reCAPTCHA, and many third-party login forms are inside IFRAMES.
-      - The accessibility tree will show "iframe" entries with their position and size on screen.
-      - Elements INSIDE cross-origin iframes do NOT appear in the accessibility tree — you must use VISUAL coordinates.
-      - ALWAYS use typeAt(x, y, text) to type inside iframes — NEVER use typeBySelector or type(index).
-      - For Google email forms:
-        * Look at the screenshot. The email input is inside the Google iframe.
-        * Use typeAt(x=<center of email input>, y=<center of email input>, text=<email>, pressEnter=true).
-        * After pressing Enter, wait for the password page to appear — look for the title change or a password field.
-        * DO NOT click "Next" button with click(index) — use typeAt with pressEnter=true OR clickAt(x,y) using the button's visual coordinates.
-      - When you see multiple input fields appearing in sequence (email → password), that is normal multi-step auth — proceed through each step.
+      RULE 2B - GOOGLE / OAUTH MULTI-STEP LOGIN (CRITICAL — READ EVERY WORD):
+      Google sign-in is a TWO-SCREEN flow. Each screen shows ONE field only. Never try to fill both on the same screen.
+
+      SCREEN 1 — EMAIL SCREEN:
+      - You see: one text input, "Next" button, possibly "Forgot email?" link.
+      - Page title contains "Sign in" or "Google Accounts" and does NOT show the user's name.
+      - What to do: typeAt(x=<email field center x>, y=<email field center y>, text=<email>, pressEnter=true)
+      - After pressEnter=true → the page TRANSITIONS. Do NOT type password yet. Wait for the next screenshot.
+
+      SCREEN 2 — PASSWORD SCREEN:
+      - You see: the user's name/email at the top, a password input (dots/bullets field), "Next" button.
+      - Page title may say "Welcome" or show the account name.
+      - What to do: typeAt(x=<password field center x>, y=<password field center y>, text=<password>, pressEnter=true)
+
+      ⛔ NEVER type the password on Screen 1 (email screen) — the password field does not exist there yet.
+      ⛔ NEVER type the email again on Screen 2 (password screen) — the email field is gone.
+      ⛔ After pressEnter=true, ALWAYS look at the new screenshot BEFORE any further action. The page changes.
+      ⛔ If the email field still shows in the screenshot AFTER you typed email+Enter, the field just visually preserved — look for the password field. If you see a password input (masked dots), you are on Screen 2.
+
+      DETECTING WHICH SCREEN YOU ARE ON:
+      - Look for a password field (type="password", shows ● or * characters, or the input is masked).
+        * If you see a password input → you are on Screen 2 → type the password.
+      - Look for the page showing the user's name or profile picture above the form.
+        * If visible → Screen 2 → type password.
+      - If you see only an email-looking text input and no masked field → Screen 1 → type email.
+
+      IFRAMES: Google sign-in elements are inside cross-origin iframes. Always use typeAt(x, y, text) — never typeBySelector or type(index=N) inside Google forms.
 
       RULE 3 - VERIFY BEFORE PROCEEDING (MOST IMPORTANT):
       - After EVERY action, look at the new screenshot BEFORE doing anything else.
@@ -277,6 +293,19 @@ export default function App() {
         * After a navigation → check the URL and page content match what was expected.
       - NEVER click "Next" or "Submit" if any required field is still empty or shows an error border/message.
       - If you see a red error message on the page (e.g. "Wrong password", "Invalid CAPTCHA", "Field required"), STOP and fix the error before continuing.
+
+      RULE 3B — MULTI-STEP FORM TRANSITION DETECTION:
+      When you typed text and pressed Enter/clicked Next, the page may have changed EVEN IF it looks similar.
+      Before repeating any typing action, ask:
+      1. What fields are CURRENTLY VISIBLE on screen? List them by type (email, password, text, etc.)
+      2. Is there a field I haven't filled yet that is NOW visible (that wasn't there before)?
+      3. Have I already completed this field on a PREVIOUS step? If yes — DO NOT type in it again.
+      
+      KEY RULE: If your LAST ACTION was typeAt/type with pressEnter=true and the screenshot now shows a DIFFERENT field than before → the form advanced. Act on the NEW field, not the old one.
+      
+      For Google login specifically:
+      - If you see a masked/dots input → it's the PASSWORD field → type the password (even if the page looks similar to email screen).
+      - If you typed email in the LAST step → DO NOT type email again → look for the password field.
 
       RULE 4 - FIELD TYPING — USE COORDINATES WHEN SELECTORS FAIL:
       - BEST method for any field: look at the screenshot, identify the field visually, use typeAt(x, y, text) with its CENTER pixel coordinates.
@@ -296,12 +325,14 @@ export default function App() {
       - Fields with text already in them are DONE. Move to the next empty required field.
 
       ===== STEP-BY-STEP VERIFICATION CHECKLIST =====
-      Before choosing your next action, answer these in your "thought":
-      1. What did my LAST ACTION do?
-      2. Did it succeed? (look at the screenshot — field filled? page changed? error visible?)
-      3. If it failed: what went wrong and what different approach will I use?
-      4. What is the NEXT required action to make progress toward the goal?
-      5. Are ALL previous required fields correctly filled before I click Next/Submit?
+      Before choosing your next action, answer ALL of these in your "thought":
+      1. What did my LAST ACTION do? (e.g., "typed email and pressed Enter")
+      2. Given that last action, what STATE should the page be in NOW? (e.g., "should be on password screen now")
+      3. Look at the screenshot. What fields/elements are CURRENTLY VISIBLE? List them.
+      4. Does the current state match what I expected? If not, why?
+      5. What is the SINGLE next action needed? (never repeat an action that already succeeded)
+      6. CRITICAL ANTI-LOOP CHECK: Did I do this exact same action in the last 2 steps?
+         If YES → try a completely different approach. Never repeat a failed action.
 
       ===== GENERAL REASONING =====
       - Think like a careful human. Look at visual cues, colors, layout, error messages.
