@@ -390,10 +390,16 @@ async function startServer() {
     });
 
     server.once('error', async (err: any) => {
-      if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-        console.log(`Port ${PORT} busy, retrying in 1s... (${retriesLeft} left)`);
-        await new Promise(r => setTimeout(r, 1000));
-        tryListen(retriesLeft - 1);
+      if (err.code === 'EADDRINUSE') {
+        console.log(`Port ${PORT} busy — killing existing process and restarting...`);
+        try { execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`); } catch (_) {}
+        await new Promise(r => setTimeout(r, 800));
+        if (retriesLeft > 0) {
+          tryListen(retriesLeft - 1);
+        } else {
+          console.error(`Could not bind to port ${PORT} after all retries.`);
+          process.exit(1);
+        }
       } else {
         console.error(`Could not bind to port ${PORT}:`, err.message);
         process.exit(1);
@@ -401,7 +407,7 @@ async function startServer() {
     });
   };
 
-  tryListen(10);
+  tryListen(3);
 }
 
 async function capturePageState(page: Page) {

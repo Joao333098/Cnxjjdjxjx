@@ -208,14 +208,16 @@ export default function App() {
       LAST ACTION: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}
 
       ${pinnedElements.length > 0 ? `
-      ===== COORDINATE PINS (USER-MARKED TARGETS — ALWAYS USE THESE) =====
-      The user has marked specific locations on the page for you to use:
-      ${pinnedElements.map(p => `• "${p.label}" → x=${Math.round(p.x)}, y=${Math.round(p.y)}`).join('\n      ')}
-      
-      For any action involving a pinned label, use those EXACT coordinates:
-      - To click: clickAt(x=N, y=M)
-      - To type:  typeAt(x=N, y=M, text=...)
-      Do NOT guess or search for these elements — use the pinned coordinates directly.
+      ===== USER PINS — HIGHEST PRIORITY TARGETS =====
+      The user has manually marked these exact spots on the page. When any action matches a pin label, use the pin FIRST — before the accessibility tree and before guessing.
+
+      ${pinnedElements.map((p, i) => `PIN ${i + 1}: "${p.label}" → x=${Math.round(p.x)}, y=${Math.round(p.y)}`).join('\n      ')}
+
+      Rules for pins:
+      - To CLICK a pin: clickAt(x=..., y=...)   using the exact pin coordinates above
+      - To TYPE into a pin: typeAt(x=..., y=..., text=...)  using the exact pin coordinates above
+      - Pins override the "prefer index" rule — if there is a pin for what you need, use the pin coordinates directly
+      - Example: if PIN 1 is "Email Field" and you need to type an email, call typeAt(x=${Math.round(pinnedElements[0]?.x ?? 0)}, y=${Math.round(pinnedElements[0]?.y ?? 0)}, text="...")
       =====
       ` : ''}
       
@@ -312,19 +314,21 @@ export default function App() {
       - If you see a masked/dots input → it's the PASSWORD field → type the password (even if the page looks similar to email screen).
       - If you typed email in the LAST step → DO NOT type email again → look for the password field.
 
-      RULE 4 - CLICKING AND TYPING — USE ELEMENT INDEX (PREFERRED):
-      The accessibility tree lists every interactive element with a number. Use that number.
+      RULE 4 - CLICKING AND TYPING — PRIORITY ORDER:
+      The accessibility tree lists every interactive element with a number. Use that number whenever possible.
 
       PRIORITY ORDER for clicking:
-        1st (BEST): click(index=N)         ← use the number from the accessibility tree. Reliable, fast, no guessing.
-        2nd: clickByText(text="...")        ← if you know the exact button/link text.
-        3rd: clickBySelector(selector)     ← if you know a CSS selector.
-        4th (LAST RESORT): clickAt(x, y)   ← ONLY for iframes (Google, reCAPTCHA) where elements don't appear in the tree.
+        0th (ABSOLUTE): User PIN coordinates  ← if the user pinned this target (see USER PINS section above), use clickAt with the pin's exact coords. ALWAYS wins.
+        1st (BEST):     click(index=N)        ← use the number from the accessibility tree. Reliable, fast, no guessing.
+        2nd:            clickByText(text)     ← if you know the exact button/link text.
+        3rd:            clickBySelector(sel)  ← if you know a CSS selector.
+        4th (FALLBACK): clickAt(x, y)         ← for iframes (Google, reCAPTCHA) or when nothing above works.
 
       PRIORITY ORDER for typing:
-        1st (BEST): type(index=N, text="...", pressEnter=true/false)  ← use element index. Clicks to focus, then types.
-        2nd: typeBySelector(selector, text)                           ← if you know the selector.
-        3rd (LAST RESORT): typeAt(x, y, text)                        ← ONLY for cross-origin iframes (Google login, CAPTCHA).
+        0th (ABSOLUTE): User PIN coordinates            ← if the user pinned this field, use typeAt with the pin's exact coords.
+        1st (BEST):     type(index=N, text, pressEnter) ← element index. Clicks to focus then types.
+        2nd:            typeBySelector(selector, text)  ← if you know the selector.
+        3rd (FALLBACK): typeAt(x, y, text)              ← ONLY for cross-origin iframes (Google login, CAPTCHA).
 
       HOW TO USE THE ACCESSIBILITY TREE:
       - Read the tree. Find the element you need (button, input, link, etc.).
@@ -455,8 +459,36 @@ export default function App() {
       try {
         result = JSON.parse(cleanedText);
       } catch (e) {
-        console.error("Failed to parse JSON:", cleanedText);
-        throw new Error(`JSON Parse error: ${(e as Error).message}`);
+        console.warn("First JSON parse failed, retrying with strict JSON prompt...", cleanedText.slice(0, 200));
+        // Retry: ask Nova to return ONLY JSON, nothing else
+        const retryResponse = await fetch('/api/nova', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: `You MUST respond with ONLY a valid JSON object. No explanations, no markdown, no plain text. The previous response was rejected because it was not valid JSON.\n\nYour goal: "${userPromptRef.current}"\nLast action: ${lastActionRef.current ? JSON.stringify(lastActionRef.current) : 'None'}\n\nRespond NOW with ONLY JSON in this exact format:\n{"thought":"brief reasoning","plan":["next step"],"action":"wait","params":{"ms":500}}` }
+                ]
+              }
+            ],
+            response_format: { type: "json_object" }
+          })
+        });
+        if (retryResponse.ok) {
+          const retryData = await retryResponse.json();
+          const retryText = retryData.choices?.[0]?.message?.content || '';
+          const retryMatch = retryText.match(/\{[\s\S]*\}/);
+          try {
+            result = JSON.parse(retryMatch ? retryMatch[0] : retryText);
+          } catch (_) {
+            // Complete fallback: return a wait action so agent loop doesn't crash
+            result = { thought: "JSON parse failed, waiting before retry.", plan: [], action: "wait", params: { ms: 1000 } };
+          }
+        } else {
+          result = { thought: "API retry failed, waiting.", plan: [], action: "wait", params: { ms: 1000 } };
+        }
       }
       console.log('AI Decision:', result);
       
