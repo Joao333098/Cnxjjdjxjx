@@ -216,6 +216,11 @@ async function startServer() {
       if (activePage) {
         try {
           console.log(`Executing action: ${action}`, params);
+          // Emit cursor position before coordinate-based actions for real-time visual feedback
+          const coordBasedActions = ['clickAt', 'typeAt', 'hover', 'doubleClick', 'rightClick', 'dragAndDrop'];
+          if (coordBasedActions.includes(action) && typeof params?.x === 'number' && typeof params?.y === 'number') {
+            socket.emit('cursor-move', { x: params.x, y: params.y });
+          }
           const result = await executeAction(activePage, action, params);
           
           // Wait for page to settle

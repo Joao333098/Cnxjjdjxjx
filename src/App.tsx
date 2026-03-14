@@ -49,6 +49,7 @@ export default function App() {
   const [stepCount, setStepCount] = useState(0);
   const [currentPlan, setCurrentPlan] = useState<string[]>([]);
   const [lastClick, setLastClick] = useState<{x: number, y: number, label?: string} | null>(null);
+  const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
   const [isContinuous, setIsContinuous] = useState(true);
   const [showElements, setShowElements] = useState(false);
   const [keyboardText, setKeyboardText] = useState('');
@@ -135,6 +136,10 @@ export default function App() {
       }]);
       setIsProcessing(false);
       isProcessingRef.current = false;
+    });
+
+    newSocket.on('cursor-move', ({ x, y }: { x: number, y: number }) => {
+      setCursorPos({ x, y });
     });
 
     newSocket.on('console-log', (data) => {
@@ -477,8 +482,9 @@ export default function App() {
         setIsThinking(false);
         lastActionRef.current = { action: result.action, params: result.params };
         
-        if (result.action === 'click' || result.action === 'type' || result.action === 'hover') {
-          if (result.params.x !== undefined && result.params.y !== undefined) {
+        const coordActions = ['click', 'type', 'hover', 'clickAt', 'typeAt', 'clickByText', 'clickBySelector', 'doubleClick', 'rightClick'];
+        if (coordActions.includes(result.action)) {
+          if (result.params?.x !== undefined && result.params?.y !== undefined) {
             setLastClick({ x: result.params.x, y: result.params.y });
           } else {
             setLastClick(null);
@@ -1219,6 +1225,26 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+
+                  {/* AI Real-time Cursor Overlay */}
+                  {cursorPos && (
+                    <motion.div
+                      key={`cursor-${cursorPos.x}-${cursorPos.y}`}
+                      initial={{ scale: 1.4, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute z-50 pointer-events-none"
+                      style={{ left: cursorPos.x, top: cursorPos.y }}
+                    >
+                      {/* Mouse cursor shape */}
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="-translate-x-0.5 -translate-y-0.5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                        <path d="M4 2L4 18L8 14L11 20L13 19L10 13L16 13L4 2Z" fill="white" stroke="#1a1a1a" strokeWidth="1.5" strokeLinejoin="round"/>
+                      </svg>
+                      <div className="mt-1 -ml-1 px-1.5 py-0.5 bg-emerald-500 text-black text-[9px] font-black rounded shadow whitespace-nowrap">
+                        AI
+                      </div>
+                    </motion.div>
+                  )}
 
                   {/* Last Click/Action Indicator */}
                   {lastClick && (
