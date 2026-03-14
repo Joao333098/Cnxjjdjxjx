@@ -622,15 +622,17 @@ async function executeAction(page: Page, action: string, params: any) {
         return clickAtResult;
       case "click":
         if (params.index !== undefined) {
-          // Step 1: find element coords via JS
+          // Step 1: find element coords via JS (note: indices start at 1, never 0)
           const indexResult = await page.evaluate(`(function(index) {
             var target = document.querySelector('[data-agent-index="' + index + '"]');
             if (target) {
-              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.scrollIntoView({ behavior: 'instant', block: 'center' });
               var style = window.getComputedStyle(target);
               if (style.display === 'none' || style.visibility === 'hidden') return { success: false, reason: 'hidden' };
               var rect = target.getBoundingClientRect();
-              return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+              var tag = target.tagName.toLowerCase();
+              var type = target.getAttribute('type') || '';
+              return { success: true, tag, type, id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
             }
             return { success: false, reason: 'not found' };
           })(${JSON.stringify(params.index)})`);
@@ -639,12 +641,34 @@ async function executeAction(page: Page, action: string, params: any) {
             await page.mouse.move(indexResult.x, indexResult.y);
             await page.waitForTimeout(80);
             await page.mouse.click(indexResult.x, indexResult.y);
+            // Step 3: for radio/checkbox, also fire change event via JS to handle SPA frameworks
+            if (indexResult.tag === 'input' && (indexResult.type === 'radio' || indexResult.type === 'checkbox')) {
+              try {
+                await page.evaluate(`(function(index) {
+                  var t = document.querySelector('[data-agent-index="' + index + '"]');
+                  if (t) {
+                    t.checked = true;
+                    t.dispatchEvent(new Event('change', { bubbles: true }));
+                    t.dispatchEvent(new Event('input', { bubbles: true }));
+                    t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                  }
+                })(${JSON.stringify(params.index)})`);
+              } catch (_) {}
+            }
           } else {
             // Fallback: JS click — wrapped in case context is destroyed by navigation
             try {
               await page.evaluate(`(function(index) {
                 var t = document.querySelector('[data-agent-index="' + index + '"]');
-                if (t) { t.focus(); t.click(); }
+                if (t) {
+                  t.focus();
+                  t.click();
+                  if (t.tagName === 'INPUT' && (t.type === 'radio' || t.type === 'checkbox')) {
+                    t.checked = true;
+                    t.dispatchEvent(new Event('change', { bubbles: true }));
+                    t.dispatchEvent(new Event('input', { bubbles: true }));
+                  }
+                }
               })(${JSON.stringify(params.index)})`);
             } catch (_) {}
           }

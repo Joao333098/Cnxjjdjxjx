@@ -69,6 +69,7 @@ export default function App() {
   const [showHintsPanel, setShowHintsPanel] = useState(false);
   const [isPinMode, setIsPinMode] = useState(false);
   const [pendingPin, setPendingPin] = useState<{x: number, y: number} | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
   const [pinLabelInput, setPinLabelInput] = useState('');
   
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -362,6 +363,22 @@ export default function App() {
       RULE 6 - FIELD ALREADY FILLED = DO NOT TOUCH IT:
       - If the accessibility tree or screenshot shows a field already has content, DO NOT type in that field again.
       - Fields with text already in them are DONE. Move to the next empty required field.
+
+      RULE 7 - QUIZ / MULTIPLE CHOICE / CHECKBOXES:
+      Element indices in the accessibility tree START AT 1. Index 0 does NOT exist — never use click(index=0).
+      
+      When you see a quiz with answer options (radio buttons, checkboxes, labeled options):
+      1. Read the accessibility tree carefully. Each option is a separate element with its own index number ≥ 1.
+      2. Identify WHICH option is correct based on the question.
+      3. Click the CORRECT option using: click(index=<that option's number>)
+         OR use clickByText(text="<exact text of the correct answer option>")
+      4. After clicking, verify in the next screenshot that the option is now checked/selected.
+      
+      If click(index=N) didn't visually select the option:
+      - Try clickAt(x=<center x of option>, y=<center y of option>) as fallback
+      - OR use runJs(code="document.querySelector('input[type=radio]:nth-of-type(N)').click()")
+      
+      NEVER submit/proceed before confirming the correct answer is visually selected (filled circle or checkmark visible).
 
       ===== STEP-BY-STEP VERIFICATION CHECKLIST =====
       Before choosing your next action, answer ALL of these in your "thought":
@@ -657,20 +674,69 @@ export default function App() {
   const handleManualNavigate = () => {
     if (socket && manualUrl) {
       const url = manualUrl.startsWith('http') ? manualUrl : `https://${manualUrl}`;
-      
-      // Add as a manual step to the chat
       setMessages(prev => [...prev, { 
         id: uid(), 
         role: 'agent', 
         content: `Manually navigating to ${url}`,
         action: 'navigate'
       }]);
-      
       socket.emit('execute-action', { action: 'navigate', params: { url } });
       setManualUrl('');
-      
-      // If we weren't processing, maybe we should start?
-      // For now, just let the action-completed trigger the next step if isProcessing is true
+    }
+  };
+
+  const handleSmartScan = async () => {
+    const screenshot = stateRef.current.screenshot;
+    if (!screenshot) return;
+    setIsScanning(true);
+    try {
+      const response = await fetch('/api/nova', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `You are analyzing a browser screenshot (1280x800 pixels). 
+Identify ALL interactive elements visible on the page: buttons, text inputs, password fields, checkboxes, radio buttons, dropdowns, links, search bars, and any other clickable/typeable elements.
+
+For each element, provide:
+- "label": a short descriptive name in Portuguese (e.g., "Campo Email", "Botão Entrar", "Checkbox Resposta A", "Campo Senha")
+- "x": horizontal center coordinate (0-1280)
+- "y": vertical center coordinate (0-800)
+
+Return ONLY valid JSON. No markdown, no explanations.
+Format: {"elements": [{"label": "...", "x": 123, "y": 456}, ...]}`
+              },
+              {
+                type: 'image_url',
+                image_url: { url: screenshot.startsWith('data:') ? screenshot : `data:image/jpeg;base64,${screenshot}` }
+              }
+            ]
+          }],
+          response_format: { type: 'json_object' }
+        })
+      });
+      if (!response.ok) throw new Error('Scan failed');
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content || '';
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('No JSON in response');
+      const parsed = JSON.parse(match[0]);
+      const elements: {label: string, x: number, y: number}[] = parsed.elements || [];
+      if (elements.length > 0) {
+        setPinnedElements(prev => {
+          const existing = new Set(prev.map(p => p.label));
+          const newPins = elements.filter(e => !existing.has(e.label) && typeof e.x === 'number' && typeof e.y === 'number');
+          return [...prev, ...newPins];
+        });
+      }
+    } catch (err) {
+      console.error('Smart scan failed:', err);
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -904,12 +970,29 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Smart Elements Scan */}
+                  <button
+                    onClick={handleSmartScan}
+                    disabled={isScanning || !stateRef.current.screenshot}
+                    className="w-full py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest mb-2 transition-all bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isScanning ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                        Analisando página...
+                      </>
+                    ) : (
+                      <>⚡ Elementos Inteligentes</>
+                    )}
+                  </button>
+                  <p className="text-[9px] text-zinc-600 text-center mb-3">A IA analisa a tela e cria pins automaticamente</p>
+
                   {/* Pin mode toggle */}
                   <button
                     onClick={() => { setIsPinMode(!isPinMode); setShowHintsPanel(false); }}
                     className={`w-full py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest mb-3 transition-all ${isPinMode ? 'bg-yellow-400 text-black' : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/30'}`}
                   >
-                    {isPinMode ? '● Modo PIN Ativo — clique no browser' : '+ Ativar Modo PIN'}
+                    {isPinMode ? '● Modo PIN Ativo — clique no browser' : '+ Modo PIN Manual'}
                   </button>
 
                   {/* Existing pins list */}
