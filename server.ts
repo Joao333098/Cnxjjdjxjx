@@ -590,26 +590,34 @@ async function executeAction(page: Page, action: string, params: any) {
         // Perform the actual click
         await page.mouse.click(clickAtX, clickAtY);
         
-        // JS Fallback
+        // JS Fallback — wrapped in try/catch since navigation may destroy context
         await page.waitForTimeout(100);
-        const clickAtResult = await page.evaluate(`(function(x, y) {
-          var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
-          var el = document.elementFromPoint(x, y);
-          if (!el) return { success: false, reason: 'no element at coordinates' };
-          var target = el.closest(sel);
-          if (!target) {
-            for (var dx = -5; dx <= 5; dx += 2) {
-              for (var dy = -5; dy <= 5; dy += 2) {
-                var near = document.elementFromPoint(x+dx, y+dy);
-                if (near) { target = near.closest(sel); if (target) break; }
+        let clickAtResult: any = { success: true };
+        try {
+          clickAtResult = await page.evaluate(`(function(x, y) {
+            var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
+            var el = document.elementFromPoint(x, y);
+            if (!el) return { success: false, reason: 'no element at coordinates' };
+            var target = el.closest(sel);
+            if (!target) {
+              for (var dx = -5; dx <= 5; dx += 2) {
+                for (var dy = -5; dy <= 5; dy += 2) {
+                  var near = document.elementFromPoint(x+dx, y+dy);
+                  if (near) { target = near.closest(sel); if (target) break; }
+                }
+                if (target) break;
               }
-              if (target) break;
             }
+            if (!target) target = el;
+            if (target) { target.focus(); target.click(); return { success: true, tag: target.tagName.toLowerCase(), id: target.id }; }
+            return { success: false, reason: 'no interactive element found at coordinates' };
+          })(${clickAtX}, ${clickAtY})`);
+        } catch (evalErr: any) {
+          // Execution context destroyed = navigation triggered by click = success
+          if (evalErr.message?.includes('context was destroyed') || evalErr.message?.includes('navigation')) {
+            clickAtResult = { success: true, navigated: true };
           }
-          if (!target) target = el;
-          if (target) { target.focus(); target.click(); return { success: true, tag: target.tagName.toLowerCase(), id: target.id }; }
-          return { success: false, reason: 'no interactive element found at coordinates' };
-        })(${clickAtX}, ${clickAtY})`);
+        }
         try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return clickAtResult;
       case "click":
@@ -632,15 +640,17 @@ async function executeAction(page: Page, action: string, params: any) {
             await page.waitForTimeout(80);
             await page.mouse.click(indexResult.x, indexResult.y);
           } else {
-            // Fallback: JS click
-            await page.evaluate(`(function(index) {
-              var t = document.querySelector('[data-agent-index="' + index + '"]');
-              if (t) { t.focus(); t.click(); }
-            })(${JSON.stringify(params.index)})`);
+            // Fallback: JS click — wrapped in case context is destroyed by navigation
+            try {
+              await page.evaluate(`(function(index) {
+                var t = document.querySelector('[data-agent-index="' + index + '"]');
+                if (t) { t.focus(); t.click(); }
+              })(${JSON.stringify(params.index)})`);
+            } catch (_) {}
           }
           // Wait for any navigation triggered by the click
           try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
-          return indexResult;
+          return indexResult ?? { success: true };
         }
         if (params.selector) {
           await page.click(params.selector, { timeout: 5000 });
@@ -660,68 +670,77 @@ async function executeAction(page: Page, action: string, params: any) {
         // Perform the actual click
         await page.mouse.click(clickX, clickY);
         
-        // JS Fallback: If it's a focusable element, ensure it's focused and clicked
+        // JS Fallback: wrapped in try/catch since navigation may destroy context
         await page.waitForTimeout(100);
-        const clickResult = await page.evaluate(`(function(x, y) {
-          var el = document.elementFromPoint(x, y);
-          if (!el) return null;
-          var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
-          var target = el.closest(sel);
-          if (!target) {
-            for (var dx = -15; dx <= 15; dx += 3) {
-              for (var dy = -15; dy <= 15; dy += 3) {
-                var near = document.elementFromPoint(x + dx, y + dy);
-                if (near) { target = near.closest(sel); if (target) break; }
+        let clickResult: any = null;
+        try {
+          clickResult = await page.evaluate(`(function(x, y) {
+            var el = document.elementFromPoint(x, y);
+            if (!el) return null;
+            var sel = 'input, textarea, [contenteditable="true"], select, button, a, [role="button"], [role="link"]';
+            var target = el.closest(sel);
+            if (!target) {
+              for (var dx = -15; dx <= 15; dx += 3) {
+                for (var dy = -15; dy <= 15; dy += 3) {
+                  var near = document.elementFromPoint(x + dx, y + dy);
+                  if (near) { target = near.closest(sel); if (target) break; }
+                }
+                if (target) break;
               }
-              if (target) break;
             }
-          }
-          if (!target) target = el;
-          if (target) {
-            target.focus();
-            target.click();
-            return { tag: target.tagName.toLowerCase(), id: target.id, className: target.className, text: (target.innerText||'').slice(0,50), role: target.getAttribute('role') };
-          }
-          return null;
-        })(${clickX}, ${clickY})`);
-        // Wait for any navigation triggered by the click
+            if (!target) target = el;
+            if (target) {
+              target.focus();
+              target.click();
+              return { tag: target.tagName.toLowerCase(), id: target.id, className: target.className, text: (target.innerText||'').slice(0,50), role: target.getAttribute('role') };
+            }
+            return null;
+          })(${clickX}, ${clickY})`);
+        } catch (_) { clickResult = { navigated: true }; }
         try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return { element: clickResult };
       case "clickByText":
         if (!params.text) throw new Error("Text is required for clickByText");
-        const textResult = await page.evaluate(`(function(text) {
-          var els = Array.from(document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'));
-          var target = els.find(function(el) { return (el.textContent||'').trim().toLowerCase().includes(text.toLowerCase()); });
-          if (target) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            target.focus();
-            target.click();
-            var rect = target.getBoundingClientRect();
-            return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
-          }
-          return { success: false };
-        })(${JSON.stringify(params.text)})`);
+        let textResult: any = { success: true };
+        try {
+          textResult = await page.evaluate(`(function(text) {
+            var els = Array.from(document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'));
+            var target = els.find(function(el) { return (el.textContent||'').trim().toLowerCase().includes(text.toLowerCase()); });
+            if (target) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.focus();
+              target.click();
+              var rect = target.getBoundingClientRect();
+              return { success: true, tag: target.tagName.toLowerCase(), id: target.id, x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+            }
+            return { success: false };
+          })(${JSON.stringify(params.text)})`);
+        } catch (_) { textResult = { success: true, navigated: true }; }
         try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return textResult;
       case "clickBySelector":
         if (!params.selector) throw new Error("Selector is required for clickBySelector");
-        const selectorResult = await page.evaluate(`(function(selector) {
-          const target = document.querySelector(selector);
-          if (target instanceof HTMLElement) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            target.focus();
-            target.click();
-            const rect = target.getBoundingClientRect();
-            return {
-              success: true,
-              tag: target.tagName.toLowerCase(),
-              id: target.id,
-              x: rect.x + rect.width / 2,
-              y: rect.y + rect.height / 2
-            };
-          }
-          return { success: false };
-        })(${JSON.stringify(params.selector)})`);
+        let selectorResult: any = { success: true };
+        try {
+          selectorResult = await page.evaluate(`(function(selector) {
+            const target = document.querySelector(selector);
+            if (target instanceof HTMLElement) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              target.focus();
+              target.click();
+              const rect = target.getBoundingClientRect();
+              return {
+                success: true,
+                tag: target.tagName.toLowerCase(),
+                id: target.id,
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2
+              };
+            }
+            return { success: false };
+          })(${JSON.stringify(params.selector)})`);
+        } catch (_) { selectorResult = { success: true, navigated: true }; }
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
         return selectorResult;
       case "doubleClick":
         if (typeof params.x !== 'number' || typeof params.y !== 'number') {
@@ -1393,7 +1412,14 @@ async function executeAction(page: Page, action: string, params: any) {
       default:
         console.warn("Unknown action:", action);
     }
-  } catch (e) {
+  } catch (e: any) {
+    // If the error is due to navigation destroying the execution context, treat as success
+    const msg = e?.message || '';
+    if (msg.includes('context was destroyed') || msg.includes('Execution context was destroyed')) {
+      console.log(`Action ${action}: execution context destroyed by navigation — treating as success`);
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 5000 }); } catch (_) {}
+      return { success: true, navigated: true };
+    }
     console.error(`Action ${action} failed:`, e);
     throw e;
   }
