@@ -429,109 +429,155 @@ async function executeAction(page: Page, action: string, params: any) {
         // Tap to focus first
         await page.touchscreen.tap(typeX, typeY);
         await page.waitForTimeout(200);
-        
+
         // JS fallback: find the best editable target near coordinates
         const focusedTarget = await page.evaluate(({ x, y }) => {
-          const getEditableElement = (x, y) => {
-            const el = document.elementFromPoint(x, y);
-            if (!el) return null;
-            const input = el.closest('input, textarea, [contenteditable="true"]');
-            if (input instanceof HTMLElement) return input;
-            
-            const radius = 24;
-            for (let dx = -radius; dx <= radius; dx += 4) {
-              for (let dy = -radius; dy <= radius; dy += 4) {
-                const nearEl = document.elementFromPoint(x + dx, y + dy);
-                const nearInput = nearEl?.closest('input, textarea, [contenteditable="true"]');
-                if (nearInput instanceof HTMLElement) return nearInput;
+          const isEditable = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+              return !el.disabled && !el.readOnly;
+            }
+            if (el.isContentEditable) return true;
+            const role = el.getAttribute('role');
+            return role === 'textbox';
+          };
+
+          const isVisible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            const style = window.getComputedStyle(el);
+            return style.visibility !== 'hidden' && style.display !== 'none';
+          };
+
+          const centerDistance = (el) => {
+            const rect = el.getBoundingClientRect();
+            const cx = rect.x + rect.width / 2;
+            const cy = rect.y + rect.height / 2;
+            return Math.hypot(cx - x, cy - y);
+          };
+
+          const collectCandidates = () => {
+            const candidates = [];
+            const addIfEditable = (el) => {
+              if (!isEditable(el) || !isVisible(el)) return;
+              candidates.push(el);
+            };
+
+            const atPoint = document.elementFromPoint(x, y);
+            if (atPoint instanceof HTMLElement) {
+              const direct = atPoint.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+              addIfEditable(direct);
+
+              // Label fallback: clicking label should target its associated control
+              if (atPoint instanceof HTMLLabelElement && atPoint.control) {
+                addIfEditable(atPoint.control);
+              }
+              const labelParent = atPoint.closest('label');
+              if (labelParent instanceof HTMLLabelElement && labelParent.control) {
+                addIfEditable(labelParent.control);
               }
             }
 
-            // Last fallback: find first visible editable field in viewport
-            const candidates = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
-            const visible = candidates.find((candidate) => {
-              if (!(candidate instanceof HTMLElement)) return false;
-              const rect = candidate.getBoundingClientRect();
-              return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
-            });
-            return visible instanceof HTMLElement ? visible : null;
+            const radius = 28;
+            for (let dx = -radius; dx <= radius; dx += 4) {
+              for (let dy = -radius; dy <= radius; dy += 4) {
+                const near = document.elementFromPoint(x + dx, y + dy);
+                if (!(near instanceof HTMLElement)) continue;
+                const target = near.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+                addIfEditable(target);
+                if (near instanceof HTMLLabelElement && near.control) addIfEditable(near.control);
+                const nearLabel = near.closest('label');
+                if (nearLabel instanceof HTMLLabelElement && nearLabel.control) addIfEditable(nearLabel.control);
+              }
+            }
+
+            if (candidates.length === 0) {
+              document.querySelectorAll('input, textarea, [contenteditable="true"], [role="textbox"]').forEach((el) => addIfEditable(el));
+            }
+
+            return Array.from(new Set(candidates));
           };
 
-          const target = getEditableElement(x, y);
-          if (!(target instanceof HTMLElement)) return { found: false };
+          const candidates = collectCandidates();
+          if (candidates.length === 0) return { found: false };
 
-          target.focus();
+          const best = candidates.sort((a, b) => centerDistance(a) - centerDistance(b))[0];
+          if (!(best instanceof HTMLElement)) return { found: false };
 
-          const rect = target.getBoundingClientRect();
+          best.focus();
+          const rect = best.getBoundingClientRect();
+
           return {
             found: true,
-            tag: target.tagName.toLowerCase(),
-            id: target.id || undefined,
+            tag: best.tagName.toLowerCase(),
+            id: best.id || undefined,
             x: rect.x + rect.width / 2,
             y: rect.y + rect.height / 2,
           };
         }, { x: typeX, y: typeY });
-        await page.waitForTimeout(200);
+
+        await page.waitForTimeout(150);
 
         if (!focusedTarget?.found) {
           throw new Error("No editable element found near coordinates for type");
         }
-        
-        // Clear field if requested
-        if (params.clear) {
-          await page.keyboard.down('Meta');
-          await page.keyboard.press('a');
-          await page.keyboard.up('Meta');
 
-          await page.keyboard.down('Control');
-          await page.keyboard.press('a');
-          await page.keyboard.up('Control');
+        if (params.clear) {
+          await page.keyboard.press('ControlOrMeta+a');
           await page.keyboard.press('Backspace');
+          await page.waitForTimeout(50);
         }
 
-        // Type normally first
-        await page.keyboard.type(textToType, { delay: 30 });
+        if (textToType) {
+          await page.keyboard.type(textToType, { delay: 30 });
+        }
 
-        // Verification/fallback for flaky mobile inputs that ignore keyboard events
-        const typedOk = await page.evaluate((expectedText) => {
+        // Verification/fallback for inputs that ignore keyboard events
+        const typedOk = await page.evaluate((expectedText, clearRequested) => {
           const active = document.activeElement;
           if (!active) return false;
 
           if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-            return active.value.includes(expectedText);
+            return clearRequested ? active.value === expectedText : active.value.includes(expectedText);
           }
 
           if (active instanceof HTMLElement && active.isContentEditable) {
-            return (active.innerText || '').includes(expectedText);
+            const value = (active.innerText || '').trim();
+            return clearRequested ? value === expectedText : value.includes(expectedText);
           }
 
           return false;
-        }, textToType);
+        }, textToType, Boolean(params.clear));
 
         if (!typedOk && textToType) {
-          await page.evaluate((value) => {
+          await page.evaluate((value, clearRequested) => {
             const active = document.activeElement;
             if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-              active.value = value;
+              active.focus();
+              if (clearRequested) active.value = '';
+              active.value = clearRequested ? value : `${active.value}${value}`;
               active.dispatchEvent(new Event('input', { bubbles: true }));
               active.dispatchEvent(new Event('change', { bubbles: true }));
               return;
             }
 
             if (active instanceof HTMLElement && active.isContentEditable) {
-              active.innerText = value;
+              active.focus();
+              const current = clearRequested ? '' : (active.innerText || '');
+              active.innerText = `${current}${value}`;
               active.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
               active.dispatchEvent(new Event('change', { bubbles: true }));
             }
-          }, textToType);
+          }, textToType, Boolean(params.clear));
         }
 
         if (params.pressEnter) {
           await page.waitForTimeout(200);
           await page.keyboard.press("Enter");
         }
+
         return { success: true, target: focusedTarget };
-        break;
       case "scroll":
         const scrollAmount = params.amount || 500;
         if (params.direction === "down") {
